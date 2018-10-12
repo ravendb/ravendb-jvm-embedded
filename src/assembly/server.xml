@@ -11,7 +11,7 @@
 
     <fileSets>
         <fileSet>
-            <directory>target/nuget/contentFiles/any/any/</directory>
+            <directory>target/nuget/contentFiles/any/any/RavenDBServer</directory>
             <outputDirectory>.</outputDirectory>
         </fileSet>
     </fileSets>

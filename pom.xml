@@ -8,10 +8,76 @@
     <artifactId>ravendb-embedded</artifactId>
     <version>4.1.1</version>
 
+    <name>RavenDB Embedded</name>
+    <description>RavenDB package for running RavenDB in embedded mode</description>
+    <url>http://ravendb.net</url>
+    <packaging>jar</packaging>
+
+    <scm>
+        <connection>scm:git:https://github.com/ravendb/ravendb-jvm-embedded.git</connection>
+        <developerConnection>scm:git:git@github.com:ravendb/ravendb-jvm-embedded.git</developerConnection>
+        <url>https://github.com/ravendb/ravendb-jvm-embedded.git</url>
+        <tag>HEAD</tag>
+    </scm>
+
+    <licenses>
+        <license>
+            <name>RavenDB License</name>
+            <url>https://github.com/ravendb/ravendb-jvm-embedded/blob/v4.1/LICENSE</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <email>marcin@ravendb.net</email>
+            <id>marcin@ravendb.net</id>
+            <name>Marcin Lewandowski</name>
+            <organizationUrl>http://ravendb.net</organizationUrl>
+            <roles>
+                <role>developer</role>
+                <role>release manager</role>
+            </roles>
+        </developer>
+    </developers>
+
     <properties>
         <server.version>4.1.1</server.version>
-        <client.version>4.1.1</client.version>
+        <client.version>4.1.2-SNAPSHOT</client.version>
+
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <junit.version>4.12</junit.version>
+        <junit.jupiter.version>5.0.2</junit.jupiter.version>
+        <junit.platform.version>1.0.2</junit.platform.version>
     </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>net.ravendb</groupId>
+            <artifactId>ravendb</artifactId>
+            <version>${client.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>${junit.jupiter.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>3.8.0</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <distributionManagement>
+        <repository>
+            <id>ossrh</id>
+            <url>https://oss.sonatype.org/service/local/staging/deploy/maven2/</url>
+        </repository>
+    </distributionManagement>
 
     <build>
         <resources>
@@ -24,6 +90,52 @@
         </resources>
 
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>2.4</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-release-plugin</artifactId>
+                <version>2.5.3</version>
+                <configuration>
+                    <tagNameFormat>v@{project.version}</tagNameFormat>
+                    <releaseProfiles>release</releaseProfiles>
+                </configuration>
+            </plugin>
+            <plugin>
+                <inherited>true</inherited>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>2.8.1</version>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.7.0</version>
+                <configuration>
+                    <source>1.8</source>
+                    <target>1.8</target>
+                    <encoding>UTF-8</encoding>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>com.googlecode.maven-download-plugin</groupId>
                 <artifactId>download-maven-plugin</artifactId>
@@ -56,6 +168,7 @@
                             <goal>single</goal>
                         </goals>
                         <configuration>
+                            <attach>false</attach>
                             <finalName>ravendb-server</finalName>
                             <appendAssemblyId>false</appendAssemblyId>
                             <descriptors>
@@ -65,14 +178,49 @@
                     </execution>
                 </executions>
             </plugin>
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>2.19.1</version>
+                <configuration>
+                    <trimStackTrace>false</trimStackTrace>
+                </configuration>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.junit.platform</groupId>
+                        <artifactId>junit-platform-surefire-provider</artifactId>
+                        <version>${junit.platform.version}</version>
+                    </dependency>
+                    <dependency>
+                        <groupId>org.junit.jupiter</groupId>
+                        <artifactId>junit-jupiter-engine</artifactId>
+                        <version>${junit.jupiter.version}</version>
+                    </dependency>
+                </dependencies>
+            </plugin>
         </plugins>
     </build>
 
-    <dependencies>
-        <dependency>
-            <groupId>net.ravendb</groupId>
-            <artifactId>ravendb</artifactId>
-            <version>${client.version}</version>
-        </dependency>
-    </dependencies>
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>1.5</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
