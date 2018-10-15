@@ -6,11 +6,11 @@ import net.ravendb.client.documents.IDocumentStore;
 import net.ravendb.client.documents.Lazy;
 import net.ravendb.client.exceptions.ConcurrencyException;
 import net.ravendb.client.exceptions.RavenException;
-import net.ravendb.client.http.RequestExecutor;
 import net.ravendb.client.primitives.CleanCloseable;
 import net.ravendb.client.primitives.Reference;
 import net.ravendb.client.primitives.Tuple;
 import net.ravendb.client.serverwide.operations.CreateDatabaseOperation;
+import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.logging.Log;
@@ -34,7 +34,7 @@ public class EmbeddedServer implements CleanCloseable {
 
     public static final String END_OF_STREAM_MARKER = "$$END_OF_STREAM$$";
 
-    EmbeddedServer() {
+    public EmbeddedServer() {
     }
 
     private static final Log logger = LogFactory.getLog(EmbeddedServer.class);
@@ -121,7 +121,7 @@ public class EmbeddedServer implements CleanCloseable {
 
     public String getServerUri() {
         AtomicReference<Lazy<Tuple<String, Process>>> server = _serverTask;
-        if (server == null) {
+        if (server.get() == null) {
             throw new IllegalStateException("Please run startServer() before trying to use the server.");
         }
 
@@ -176,8 +176,7 @@ public class EmbeddedServer implements CleanCloseable {
     private Tuple<String, Process> runServer(ServerOptions options) {
         try {
             if (options.isClearTargetServerLocation()) {
-                System.out.println("About to clear: " + options.getTargetServerLocation());  //TODO: delete this line
-                //TODO: FileUtils.deleteDirectory(new File(options.getTargetServerLocation()));
+                FileUtils.deleteDirectory(new File(options.getTargetServerLocation()));
             }
 
             options.provider.provide(options.getTargetServerLocation());
