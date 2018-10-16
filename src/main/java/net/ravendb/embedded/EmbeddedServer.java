@@ -301,6 +301,10 @@ public class EmbeddedServer implements CleanCloseable {
                 if (shouldStop.value) {
                     break;
                 }
+
+                if (line == null) {
+                    break;
+                }
             }
         } catch (InterruptedException e) {
             throw new RavenException("Unable to read server output: " + e.getMessage(), e);
