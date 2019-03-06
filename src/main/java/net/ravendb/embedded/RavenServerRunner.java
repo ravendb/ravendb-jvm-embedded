@@ -88,9 +88,14 @@ class RavenServerRunner {
         try {
             process = processBuilder.start();
         } catch (Exception e) {
+            String path = Paths.get("").toAbsolutePath().toString();
+            if (processBuilder.directory() != null) {
+                path = processBuilder.directory().getAbsolutePath();
+            }
+
             throw new IllegalStateException("Unable to execute server. " + System.lineSeparator()
                     + "Command was: " + System.lineSeparator()
-                    + (ObjectUtils.firstNonNull(processBuilder.directory().getAbsolutePath(), Paths.get("").toAbsolutePath().toString()))
+                    + path
                     + "> "
                     + String.join(" ", processBuilder.command()), e);
         }
