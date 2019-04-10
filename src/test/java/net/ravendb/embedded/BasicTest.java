@@ -12,6 +12,8 @@ import org.junit.jupiter.api.Test;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -27,6 +29,7 @@ public class BasicTest {
                 serverOptions.setDataDirectory(Paths.get(tempDir.value, "RavenDB").toString());
                 serverOptions.setLogsPath(Paths.get(tempDir.value, "Logs").toString());
                 serverOptions.provider = new CopyServerProvider();
+                serverOptions.setCommandLineArgs(Collections.singletonList("--Features.Availability=Experimental"));
                 embedded.startServer(serverOptions);
 
                 DatabaseOptions databaseOptions = new DatabaseOptions("Test");

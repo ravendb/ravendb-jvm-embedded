@@ -81,6 +81,8 @@ class RavenServerRunner {
             commandLineArgs.addAll(0, Arrays.asList("--fx-version", options.getFrameworkVersion()));
         }
 
+        commandLineArgs.addAll(options.getCommandLineArgs());
+
         commandLineArgs.add(0, options.getDotNetPath());
 
         ProcessBuilder processBuilder = new ProcessBuilder(commandLineArgs);
