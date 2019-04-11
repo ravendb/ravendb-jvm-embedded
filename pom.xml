@@ -40,7 +40,7 @@
 
     <properties>
         <server.version>4.1.4</server.version>
-        <client.version>${version}</client.version>
+        <client.version>4.1.6</client.version>
 
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
