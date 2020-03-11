@@ -4,7 +4,7 @@
 
     <groupId>net.ravendb</groupId>
     <artifactId>ravendb-embedded</artifactId>
-    <version>4.1.7-SNAPSHOT</version>
+    <version>4.2.0-SNAPSHOT</version>
 
     <name>RavenDB Embedded</name>
     <description>RavenDB package for running RavenDB in embedded mode</description>
@@ -21,7 +21,7 @@
     <licenses>
         <license>
             <name>RavenDB License</name>
-            <url>https://github.com/ravendb/ravendb-jvm-embedded/blob/v4.1/LICENSE</url>
+            <url>https://github.com/ravendb/ravendb-jvm-embedded/blob/v4.2/LICENSE</url>
         </license>
     </licenses>
 
@@ -39,8 +39,8 @@
     </developers>
 
     <properties>
-        <server.version>4.1.8</server.version>
-        <client.version>4.1.7</client.version>
+        <server.version>4.2.101</server.version>
+        <client.version>4.2.0</client.version>
 
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
