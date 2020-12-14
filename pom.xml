@@ -39,8 +39,8 @@
     </developers>
 
     <properties>
-        <server.version>5.0.3</server.version>
-        <client.version>5.0.1</client.version>
+        <server.version>5.0.7</server.version>
+        <client.version>5.0.2</client.version>
 
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
