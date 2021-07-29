@@ -4,7 +4,7 @@
 
     <groupId>net.ravendb</groupId>
     <artifactId>ravendb-embedded</artifactId>
-    <version>5.0.3-SNAPSHOT</version>
+    <version>5.2.0-SNAPSHOT</version>
 
     <name>RavenDB Embedded</name>
     <description>RavenDB package for running RavenDB in embedded mode</description>
@@ -39,8 +39,8 @@
     </developers>
 
     <properties>
-        <server.version>5.0.7</server.version>
-        <client.version>5.0.2</client.version>
+        <server.version>5.2.1</server.version>
+        <client.version>5.2.0</client.version>
 
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
