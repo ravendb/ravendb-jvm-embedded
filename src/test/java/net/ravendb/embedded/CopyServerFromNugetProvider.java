@@ -1,13 +1,15 @@
 package net.ravendb.embedded;
 
-import org.apache.commons.io.FileUtils;
-
 import java.io.File;
 import java.io.IOException;
 
-public class CopyServerProvider implements IProvideRavenDBServer {
+public class CopyServerFromNugetProvider extends CopyServerProvider {
 
     public static final String SERVER_FILES = "target/nuget/contentFiles/any/any/RavenDBServer";
+
+    public CopyServerFromNugetProvider() {
+        super(SERVER_FILES);
+    }
 
     @Override
     public void provide(String targetDirectory) throws IOException {
@@ -17,6 +19,6 @@ public class CopyServerProvider implements IProvideRavenDBServer {
                     ". The one with pom.xml file. ");
         }
 
-        FileUtils.copyDirectory(new File(SERVER_FILES), new File(targetDirectory));
+        super.provide(targetDirectory);
     }
 }

@@ -2,7 +2,6 @@ package net.ravendb.embedded;
 
 import com.google.common.io.Files;
 import net.ravendb.client.documents.IDocumentStore;
-import net.ravendb.client.documents.conventions.DocumentConventions;
 import net.ravendb.client.documents.session.IDocumentSession;
 import net.ravendb.client.primitives.CleanCloseable;
 import net.ravendb.client.primitives.Reference;
@@ -35,7 +34,7 @@ public class SecuredBasicTest {
                 serverOptions.setTargetServerLocation(Paths.get(tempDir.value, "RavenDBServer").toString());
                 serverOptions.setDataDirectory(Paths.get(tempDir.value, "RavenDB").toString());
                 serverOptions.setLogsPath(Paths.get(tempDir.value, "Logs").toString());
-                serverOptions.provider = new CopyServerProvider();
+                serverOptions.provider = new CopyServerFromNugetProvider();
                 embedded.startServer(serverOptions);
 
                 DatabaseOptions databaseOptions = new DatabaseOptions("Test");

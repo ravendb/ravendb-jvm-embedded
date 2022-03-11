@@ -124,6 +124,15 @@ public class ServerOptions {
         return this;
     }
 
+    /**
+     * Allows using external RavenDB server
+     *
+     * @param serverLocation Path to zip file or to extracted server directory
+     */
+    public void withExternalServer(String serverLocation) {
+        this.provider = new ExternalServerProvider(serverLocation);
+    }
+
     private static KeyStore createTrustStore(String caCertificatePath) throws KeyStoreException, CertificateException, NoSuchAlgorithmException, IOException {
         KeyStore trustStore = KeyStore.getInstance("PKCS12");
         trustStore.load(null, null);
