@@ -78,7 +78,8 @@ class RavenServerRunner {
         commandLineArgs.add(0, CommandLineArgumentEscaper.escapeSingleArg(serverDllPath));
 
         if (StringUtils.isNotBlank(options.getFrameworkVersion())) {
-            commandLineArgs.addAll(0, Arrays.asList("--fx-version", options.getFrameworkVersion()));
+            String frameworkVersion = RuntimeFrameworkVersionMatcher.match(options);
+            commandLineArgs.addAll(0, Arrays.asList("--fx-version", frameworkVersion));
         }
 
         commandLineArgs.addAll(options.getCommandLineArgs());

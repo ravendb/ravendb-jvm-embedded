@@ -146,8 +146,7 @@ public class EmbeddedServer implements CleanCloseable {
 
                 try (OutputStream stream = process.getOutputStream();
                 PrintWriter writer = new PrintWriter(stream)) {
-                    writer.println("q");
-                    writer.println("y");
+                    writer.println("shutdown no-confirmation");
                 }
 
                 if (process.waitFor(_gracefulShutdownTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
