@@ -4,7 +4,7 @@
 
     <groupId>net.ravendb</groupId>
     <artifactId>ravendb-embedded</artifactId>
-    <version>5.4.4-SNAPSHOT</version>
+    <version>6.0.0-SNAPSHOT</version>
 
     <name>RavenDB Embedded</name>
     <description>RavenDB package for running RavenDB in embedded mode</description>
@@ -21,7 +21,7 @@
     <licenses>
         <license>
             <name>RavenDB License</name>
-            <url>https://github.com/ravendb/ravendb-jvm-embedded/blob/v5.0/LICENSE</url>
+            <url>https://github.com/ravendb/ravendb-jvm-embedded/blob/v6.0/LICENSE</url>
         </license>
     </licenses>
 
@@ -39,14 +39,14 @@
     </developers>
 
     <properties>
-        <server.version>5.4.113</server.version>
-        <client.version>5.4.3</client.version>
+        <server.version>6.0.2</server.version>
+        <client.version>6.0.0</client.version>
 
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <junit.version>4.12</junit.version>
-        <junit.jupiter.version>5.0.2</junit.jupiter.version>
-        <junit.platform.version>1.0.2</junit.platform.version>
+        <junit.jupiter.version>5.10.1</junit.jupiter.version>
+        <junit.platform.version>1.3.2</junit.platform.version>
     </properties>
 
     <dependencies>
@@ -65,7 +65,7 @@
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
-            <version>3.8.0</version>
+            <version>3.25.1</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -175,6 +175,11 @@
                         </configuration>
                     </execution>
                 </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>versions-maven-plugin</artifactId>
+                <version>2.16.2</version>
             </plugin>
             <plugin>
                 <artifactId>maven-surefire-plugin</artifactId>
