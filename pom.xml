@@ -4,7 +4,7 @@
 
     <groupId>net.ravendb</groupId>
     <artifactId>ravendb-embedded</artifactId>
-    <version>7.1.1</version>
+    <version>7.1.2</version>
 
     <name>RavenDB Embedded</name>
     <description>RavenDB package for running RavenDB in embedded mode</description>
@@ -15,7 +15,7 @@
         <connection>scm:git:https://github.com/ravendb/ravendb-jvm-embedded.git</connection>
         <developerConnection>scm:git:git@github.com:ravendb/ravendb-jvm-embedded.git</developerConnection>
         <url>https://github.com/ravendb/ravendb-jvm-embedded.git</url>
-        <tag>v7.1.1</tag>
+        <tag>v7.1.2</tag>
     </scm>
 
     <licenses>
@@ -39,8 +39,8 @@
     </developers>
 
     <properties>
-        <server.version>7.1.1</server.version>
-        <client.version>7.1.1</client.version>
+        <server.version>7.1.2</server.version>
+        <client.version>7.1.2</client.version>
 
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
@@ -77,7 +77,7 @@
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
-            <version>3.25.1</version>
+            <version>3.27.7</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
