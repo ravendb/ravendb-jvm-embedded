@@ -4,7 +4,7 @@
 
     <groupId>net.ravendb</groupId>
     <artifactId>ravendb-embedded</artifactId>
-    <version>7.2.2</version>
+    <version>7.2.3</version>
 
     <name>RavenDB Embedded</name>
     <description>RavenDB package for running RavenDB in embedded mode</description>
@@ -15,7 +15,7 @@
         <connection>scm:git:https://github.com/ravendb/ravendb-jvm-embedded.git</connection>
         <developerConnection>scm:git:git@github.com:ravendb/ravendb-jvm-embedded.git</developerConnection>
         <url>https://github.com/ravendb/ravendb-jvm-embedded.git</url>
-        <tag>v7.2.2</tag>
+        <tag>v7.2.3</tag>
     </scm>
 
     <licenses>
@@ -39,8 +39,8 @@
     </developers>
 
     <properties>
-        <server.version>7.2.2</server.version>
-        <client.version>7.2.2</client.version>
+        <server.version>7.2.3</server.version>
+        <client.version>7.2.3</client.version>
 
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
@@ -227,7 +227,7 @@
             <plugin>
                 <groupId>org.sonatype.central</groupId>
                 <artifactId>central-publishing-maven-plugin</artifactId>
-                <version>0.7.0</version>
+                <version>0.10.0</version>
                 <extensions>true</extensions>
                 <configuration>
                     <publishingServerId>central</publishingServerId>
