@@ -33,7 +33,7 @@ public class ServerOptions {
     private String targetServerLocation = DEFAULT_SERVER_LOCATION;
     private String dotNetPath = "dotnet";
     private boolean clearTargetServerLocation = false;
-    private boolean acceptEula = true;
+    private LicensingOptions licensing = new LicensingOptions();
     private String serverUrl;
     private Duration gracefulShutdownTimeout = Duration.ofSeconds(30);
     private Duration maxServerStartupTimeDuration = Duration.ofMinutes(1);
@@ -171,12 +171,31 @@ public class ServerOptions {
         this.dotNetPath = dotNetPath;
     }
 
-    public boolean isAcceptEula() {
-        return acceptEula;
+    public LicensingOptions getLicensing() {
+        return licensing;
     }
 
+    public void setLicensing(LicensingOptions licensing) {
+        this.licensing = licensing;
+    }
+
+    /**
+     * @deprecated use {@link #getLicensing()}.{@link LicensingOptions#isEulaAccepted() isEulaAccepted()} instead.
+     */
+    @Deprecated
+    public boolean isAcceptEula() {
+        return licensing != null && licensing.isEulaAccepted();
+    }
+
+    /**
+     * @deprecated use {@link #getLicensing()}.{@link LicensingOptions#setEulaAccepted(boolean) setEulaAccepted(boolean)} instead.
+     */
+    @Deprecated
     public void setAcceptEula(boolean acceptEula) {
-        this.acceptEula = acceptEula;
+        if (licensing == null) {
+            licensing = new LicensingOptions();
+        }
+        licensing.setEulaAccepted(acceptEula);
     }
 
     public String getServerUrl() {

@@ -41,7 +41,26 @@ class RavenServerRunner {
         List<String> commandLineArgs = new ArrayList<>();
 
         commandLineArgs.add("--Embedded.ParentProcessId=" + getProcessId("0"));
-        commandLineArgs.add("--License.Eula.Accepted=" + (options.isAcceptEula() ? "true" : "false"));
+
+        LicensingOptions licensing = options.getLicensing();
+        if (licensing != null) {
+            if (StringUtils.isNotBlank(licensing.getLicense()) && StringUtils.isNotBlank(licensing.getLicensePath())) {
+                throw new IllegalArgumentException("Only one of License options 'License' or 'LicensePath' should be specified");
+            }
+
+            if (StringUtils.isNotBlank(licensing.getLicense())) {
+                commandLineArgs.add("--License=" + CommandLineArgumentEscaper.escapeSingleArg(licensing.getLicense()));
+            } else if (StringUtils.isNotBlank(licensing.getLicensePath())) {
+                commandLineArgs.add("--License.Path=" + CommandLineArgumentEscaper.escapeSingleArg(licensing.getLicensePath()));
+            }
+
+            commandLineArgs.add("--License.Eula.Accepted=" + toCsharpBool(licensing.isEulaAccepted()));
+            commandLineArgs.add("--License.DisableAutoUpdate=" + toCsharpBool(licensing.isDisableAutoUpdate()));
+            commandLineArgs.add("--License.DisableAutoUpdateFromApi=" + toCsharpBool(licensing.isDisableAutoUpdateFromApi()));
+            commandLineArgs.add("--License.DisableLicenseSupportCheck=" + toCsharpBool(licensing.isDisableLicenseSupportCheck()));
+            commandLineArgs.add("--License.ThrowOnInvalidOrMissingLicense=" + toCsharpBool(licensing.isThrowOnInvalidOrMissingLicense()));
+        }
+
         commandLineArgs.add("--Setup.Mode=None");
 
         commandLineArgs.add("--DataDir=" + CommandLineArgumentEscaper.escapeSingleArg(options.getDataDirectory()));
@@ -104,6 +123,11 @@ class RavenServerRunner {
         }
 
         return process;
+    }
+
+    private static String toCsharpBool(boolean value) {
+        // Match C# bool.ToString(): capitalized "True"/"False".
+        return value ? "True" : "False";
     }
 
     private static String getProcessId(final String fallback) {
