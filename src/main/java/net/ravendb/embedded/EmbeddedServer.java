@@ -1,13 +1,11 @@
 package net.ravendb.embedded;
 
-import com.google.common.base.Stopwatch;
 import net.ravendb.client.documents.DocumentStore;
 import net.ravendb.client.documents.IDocumentStore;
 import net.ravendb.client.documents.Lazy;
 import net.ravendb.client.exceptions.ConcurrencyException;
 import net.ravendb.client.exceptions.RavenException;
 import net.ravendb.client.primitives.CleanCloseable;
-import net.ravendb.client.primitives.Reference;
 import net.ravendb.client.primitives.Tuple;
 import net.ravendb.client.serverwide.operations.CreateDatabaseOperation;
 import org.apache.commons.io.FileUtils;
@@ -25,7 +23,6 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiFunction;
 
 public class EmbeddedServer implements CleanCloseable {
 
@@ -192,41 +189,121 @@ public class EmbeddedServer implements CleanCloseable {
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> shutdownServerProcess(process)));
 
-        Reference<String> urlRef = new Reference<>();
-        Stopwatch startupDuration = Stopwatch.createStarted();
+        Duration timeout = options.getMaxServerStartupTimeDuration();
 
-        String outputString = readOutput(process.getInputStream(), startupDuration, options, (line, builder) -> {
-
-            if (line == null) {
-                String errorString = readOutput(process.getErrorStream(), startupDuration, options, null);
-
-                shutdownServerProcess(process);
-
-                throw new IllegalStateException(buildStartupExceptionMessage(builder.toString(), errorString));
-            }
-
-            String prefix = "Server available on: ";
-            if (line.startsWith(prefix)) {
-                urlRef.value = line.substring(prefix.length());
-                return true;
-            }
-
-            return false;
-        });
-
-        if (urlRef.value == null) {
-            String errorString = readOutput(process.getErrorStream(), startupDuration, options, null);
-
+        String url;
+        try {
+            url = awaitServerUrl(process.getInputStream(), process.getErrorStream(), timeout);
+        } catch (RuntimeException e) {
             shutdownServerProcess(process);
-            throw new IllegalStateException(buildStartupExceptionMessage(outputString, errorString));
+            throw e;
         }
 
-        return Tuple.create(urlRef.value, process);
+        return Tuple.create(url, process);
     }
 
-    private static String buildStartupExceptionMessage(String outputString, String errorString) {
+    /**
+     * Reads the server's stdout/stderr on dedicated threads (which keep draining for the process lifetime),
+     * and returns the announced server URL. Throws {@link ServerStartupTimeoutException} if the URL does not
+     * appear within {@code timeout}, or {@link IllegalStateException} if the server dies during startup.
+     * The caller is responsible for terminating the process on failure.
+     */
+    static String awaitServerUrl(InputStream stdoutStream, InputStream stderrStream, Duration timeout) {
+        StringBuilder stdoutBuilder = new StringBuilder();
+        StringBuilder stderrBuilder = new StringBuilder();
+        Object stdoutLock = new Object();
+        Object stderrLock = new Object();
+
+        CompletableFuture<String> urlFuture = new CompletableFuture<>();
+        CompletableFuture<Void> stderrEndFuture = new CompletableFuture<>();
+
+        // Drain stdout for the whole process lifetime; complete urlFuture when the server announces its URL.
+        Thread stdoutReader = new Thread(() -> {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(stdoutStream))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    synchronized (stdoutLock) {
+                        stdoutBuilder.append(line).append(System.lineSeparator());
+                    }
+
+                    String prefix = "Server available on: ";
+                    if (line.startsWith(prefix)) {
+                        urlFuture.complete(line.substring(prefix.length()));
+                    }
+                }
+            } catch (IOException e) {
+                // stream closed - the process has exited
+            }
+        }, "RavenDB Embedded stdout reader");
+        stdoutReader.setDaemon(true);
+
+        // Drain stderr for the whole process lifetime; complete stderrEndFuture when the stream ends (process exit).
+        Thread stderrReader = new Thread(() -> {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(stderrStream))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    synchronized (stderrLock) {
+                        stderrBuilder.append(line).append(System.lineSeparator());
+                    }
+                }
+            } catch (IOException e) {
+                // stream closed - the process has exited
+            } finally {
+                stderrEndFuture.complete(null);
+            }
+        }, "RavenDB Embedded stderr reader");
+        stderrReader.setDaemon(true);
+
+        stdoutReader.start();
+        stderrReader.start();
+
+        try {
+            // Race: server ready (stdout URL) vs. server died (stderr stream ended) vs. startup timeout.
+            CompletableFuture.anyOf(urlFuture, stderrEndFuture).get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            String stdout = snapshot(stdoutBuilder, stdoutLock);
+            String stderr = snapshot(stderrBuilder, stderrLock);
+            throw new ServerStartupTimeoutException(buildStartupExceptionMessage(stdout, stderr, true, timeout));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RavenException("Interrupted while waiting for the RavenDB Server to start", e);
+        } catch (ExecutionException e) {
+            throw new IllegalStateException(buildStartupExceptionMessage(
+                    snapshot(stdoutBuilder, stdoutLock), snapshot(stderrBuilder, stderrLock), false, timeout), e);
+        }
+
+        if (urlFuture.isDone()) {
+            return urlFuture.getNow(null);
+        }
+
+        // stderr stream ended before the URL appeared: allow a short grace for trailing error lines,
+        // but if the URL shows up during that window, treat startup as successful.
+        try {
+            return urlFuture.get(5, TimeUnit.SECONDS);
+        } catch (TimeoutException | ExecutionException e) {
+            // still no URL - fall through to failure
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        String stdout = snapshot(stdoutBuilder, stdoutLock);
+        String stderr = snapshot(stderrBuilder, stderrLock);
+        throw new IllegalStateException(buildStartupExceptionMessage(stdout, stderr, false, timeout));
+    }
+
+    private static String snapshot(StringBuilder builder, Object lock) {
+        synchronized (lock) {
+            return builder.toString();
+        }
+    }
+
+    private static String buildStartupExceptionMessage(String outputString, String errorString, boolean isTimeout, Duration timeout) {
         StringBuilder sb = new StringBuilder();
-        sb.append("Unable to start the RavenDB Server");
+        if (isTimeout) {
+            sb.append("Server failed to start in ").append(timeout.getSeconds()).append(" s.");
+        } else {
+            sb.append("Unable to start the RavenDB Server");
+        }
         sb.append(System.lineSeparator());
 
         if (StringUtils.isNotBlank(errorString)) {
@@ -241,72 +318,6 @@ public class EmbeddedServer implements CleanCloseable {
             sb.append(System.lineSeparator());
             sb.append(outputString);
             sb.append(System.lineSeparator());
-        }
-
-        return sb.toString();
-    }
-
-    private static String readOutput(InputStream output, Stopwatch startupDuration, ServerOptions options,
-                                     BiFunction<String, StringBuilder, Boolean> online) {
-
-        BufferedReader reader = new BufferedReader(new InputStreamReader(output));
-
-        BlockingQueue<String> readQueue = new ArrayBlockingQueue<>(50);
-
-        CompletableFuture.runAsync(() -> {
-            try {
-                while (true) {
-                    String line = reader.readLine();
-                    if (line != null) {
-                        readQueue.add(line);
-                    } else {
-                        readQueue.add(END_OF_STREAM_MARKER);
-                        break;
-                    }
-                }
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        });
-
-        StringBuilder sb = new StringBuilder();
-
-        try {
-            while (true) {
-                String line = readQueue.poll(5, TimeUnit.SECONDS);
-
-                if (options.getMaxServerStartupTimeDuration().minus(startupDuration.elapsed()).isNegative()) {
-                    return null;
-                }
-
-                if (line == null) {
-                    continue;
-                }
-
-                if (END_OF_STREAM_MARKER.equals(line)) {
-                    line = null;
-                }
-
-                if (line != null) {
-                    sb.append(line);
-                    sb.append(System.lineSeparator());
-                }
-
-                Reference<Boolean> shouldStop = new Reference<>(false);
-                if (online != null) {
-                    shouldStop.value = online.apply(line, sb);
-                }
-
-                if (shouldStop.value) {
-                    break;
-                }
-
-                if (line == null) {
-                    break;
-                }
-            }
-        } catch (InterruptedException e) {
-            throw new RavenException("Unable to read server output: " + e.getMessage(), e);
         }
 
         return sb.toString();
