@@ -11,13 +11,11 @@ import net.ravendb.client.serverwide.operations.CreateDatabaseOperation;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.SystemUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
-import java.awt.*;
 import java.io.*;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.security.KeyStore;
 import java.lang.reflect.Method;
 import java.time.Duration;
@@ -31,8 +29,6 @@ public class EmbeddedServer implements CleanCloseable {
 
     @SuppressWarnings("unused")
     public static EmbeddedServer INSTANCE = new EmbeddedServer();
-
-    public static final String END_OF_STREAM_MARKER = "$$END_OF_STREAM$$";
 
     public EmbeddedServer() {
     }
@@ -457,21 +453,19 @@ public class EmbeddedServer implements CleanCloseable {
     @SuppressWarnings("unused")
     public void openStudioInBrowser() {
         String serverUrl = getServerUri();
+        String base = serverUrl.endsWith("/") ? serverUrl : serverUrl + "/";
+        String url = base + "studio/index.html?disableAnalytics=true";
 
-        if (Desktop.isDesktopSupported()) {
-            Desktop desktop = Desktop.getDesktop();
-            try {
-                desktop.browse(new URI(serverUrl));
-            } catch (IOException | URISyntaxException e) {
-                throw new RuntimeException(e);
+        try {
+            if (SystemUtils.IS_OS_WINDOWS) {
+                new ProcessBuilder("cmd", "/c", "start", "RavenDB Studio", url).start();
+            } else if (SystemUtils.IS_OS_MAC) {
+                new ProcessBuilder("open", url).start();
+            } else {
+                new ProcessBuilder("xdg-open", url).start();
             }
-        } else {
-            Runtime runtime = Runtime.getRuntime();
-            try {
-                runtime.exec("xdg-open " + serverUrl);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
+        } catch (IOException e) {
+            throw new RavenException("Unable to open the Studio in a browser: " + e.getMessage(), e);
         }
     }
 
