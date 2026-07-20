@@ -38,6 +38,7 @@ public class ServerOptions {
     private LicensingOptions licensing = new LicensingOptions();
     private String serverUrl;
     private Duration gracefulShutdownTimeout = Duration.ofSeconds(30);
+    private Duration processKillTimeout = Duration.ofSeconds(5);
     private Duration maxServerStartupTimeDuration = Duration.ofMinutes(1);
     private List<String> commandLineArgs = new ArrayList<>();
 
@@ -214,6 +215,14 @@ public class ServerOptions {
 
     public void setGracefulShutdownTimeout(Duration gracefulShutdownTimeout) {
         this.gracefulShutdownTimeout = gracefulShutdownTimeout;
+    }
+
+    public Duration getProcessKillTimeout() {
+        return processKillTimeout;
+    }
+
+    public void setProcessKillTimeout(Duration processKillTimeout) {
+        this.processKillTimeout = processKillTimeout;
     }
 
     public Duration getMaxServerStartupTimeDuration() {
