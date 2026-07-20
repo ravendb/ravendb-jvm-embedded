@@ -2,8 +2,8 @@ package net.ravendb.embedded;
 
 import net.ravendb.client.exceptions.RavenException;
 import net.ravendb.client.util.CertificateUtils;
-import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.SystemUtils;
 
 import java.io.File;
 import java.lang.management.ManagementFactory;
@@ -15,6 +15,29 @@ import java.util.List;
 class RavenServerRunner {
 
     public static Process run(ServerOptions options) {
+        List<String> commandLineArgs = buildCommandLine(options);
+
+        ProcessBuilder processBuilder = new ProcessBuilder(commandLineArgs);
+        Process process;
+        try {
+            process = processBuilder.start();
+        } catch (Exception e) {
+            String path = Paths.get("").toAbsolutePath().toString();
+            if (processBuilder.directory() != null) {
+                path = processBuilder.directory().getAbsolutePath();
+            }
+
+            throw new IllegalStateException("Unable to execute server. " + System.lineSeparator()
+                    + "Command was: " + System.lineSeparator()
+                    + path
+                    + "> "
+                    + String.join(" ", processBuilder.command()), e);
+        }
+
+        return process;
+    }
+
+    static List<String> buildCommandLine(ServerOptions options) {
         if (StringUtils.isBlank(options.getTargetServerLocation())) {
             throw new IllegalArgumentException("targetServerLocation cannot be null or whitespace");
         }
@@ -27,18 +50,13 @@ class RavenServerRunner {
             throw new IllegalArgumentException("logsPath cannot be null or whitespace");
         }
 
-        String serverDllPath = Paths.get(options.getTargetServerLocation(), "Raven.Server.dll").toString();
-        boolean serverDllFound = new File(serverDllPath).exists();
+        ExecAndFirstArgument execAndFirstArgument = getExecAndFirstArgument(options);
+        String exec = execAndFirstArgument.exec;
+        String firstArgument = execAndFirstArgument.firstArgument;
 
-        if (!serverDllFound) {
-            throw new RavenException("Server file was not found: " + serverDllPath);
-        }
-
-        if (StringUtils.isBlank(options.getDotNetPath())) {
-            throw new IllegalArgumentException("dotNetPath cannot be null or whitespace");
-        }
-
-        List<String> commandLineArgs = new ArrayList<>();
+        // User-provided arguments come first so that library arguments (added below) win on
+        // duplicate keys — the server takes the last occurrence of a key. Matches C#.
+        List<String> commandLineArgs = new ArrayList<>(options.getCommandLineArgs());
 
         commandLineArgs.add("--Embedded.ParentProcessId=" + getProcessId("0"));
 
@@ -79,8 +97,8 @@ class RavenServerRunner {
                             + CommandLineArgumentEscaper.escapeSingleArg(String.valueOf(options.getSecurity().getCertificatePassword())));
                 }
             } else {
-                commandLineArgs.add("--Security.Certificate.Exec=" + CommandLineArgumentEscaper.escapeSingleArg(options.getSecurity().getCertificateExec()));
-                commandLineArgs.add("--Security.Certificate.Exec.Arguments=" + CommandLineArgumentEscaper.escapeSingleArg(options.getSecurity().getCertificateArguments()));
+                commandLineArgs.add("--Security.Certificate.Load.Exec=" + CommandLineArgumentEscaper.escapeSingleArg(options.getSecurity().getCertificateExec()));
+                commandLineArgs.add("--Security.Certificate.Load.Exec.Arguments=" + CommandLineArgumentEscaper.escapeSingleArg(options.getSecurity().getCertificateArguments()));
             }
 
             commandLineArgs.add("--Security.WellKnownCertificates.Admin="
@@ -94,35 +112,63 @@ class RavenServerRunner {
         }
 
         commandLineArgs.add("--ServerUrl=" + options.getServerUrl());
-        commandLineArgs.add(0, CommandLineArgumentEscaper.escapeSingleArg(serverDllPath));
 
-        if (StringUtils.isNotBlank(options.getFrameworkVersion())) {
-            String frameworkVersion = RuntimeFrameworkVersionMatcher.match(options);
-            commandLineArgs.addAll(0, Arrays.asList("--fx-version", frameworkVersion));
+        if (firstArgument != null) {
+            // dotnet + Raven.Server.dll: the dll path is the first argument, --fx-version precedes it.
+            commandLineArgs.add(0, CommandLineArgumentEscaper.escapeSingleArg(firstArgument));
+
+            if (StringUtils.isNotBlank(options.getFrameworkVersion())) {
+                String frameworkVersion = RuntimeFrameworkVersionMatcher.match(options);
+                commandLineArgs.addAll(0, Arrays.asList("--fx-version", frameworkVersion));
+            }
         }
 
-        commandLineArgs.addAll(options.getCommandLineArgs());
+        commandLineArgs.add(0, exec);
 
-        commandLineArgs.add(0, options.getDotNetPath());
+        return commandLineArgs;
+    }
 
-        ProcessBuilder processBuilder = new ProcessBuilder(commandLineArgs);
-        Process process;
-        try {
-            process = processBuilder.start();
-        } catch (Exception e) {
-            String path = Paths.get("").toAbsolutePath().toString();
-            if (processBuilder.directory() != null) {
-                path = processBuilder.directory().getAbsolutePath();
+    private static ExecAndFirstArgument getExecAndFirstArgument(ServerOptions options) {
+        String nativeExecName = SystemUtils.IS_OS_WINDOWS ? "Raven.Server.exe" : "Raven.Server";
+        String nativeExec = Paths.get(options.getTargetServerLocation(), nativeExecName).toString();
+
+        if (new File(nativeExec).exists()) {
+            // Self-contained server executable: run it directly, without dotnet and without --fx-version.
+            return new ExecAndFirstArgument(nativeExec, null);
+        }
+
+        String serverDllPath = Paths.get(options.getTargetServerLocation(), "Raven.Server.dll").toString();
+        boolean serverDllFound = new File(serverDllPath).exists();
+
+        if (!serverDllFound) {
+            if (StringUtils.equalsIgnoreCase(options.getTargetServerLocation(), ServerOptions.DEFAULT_SERVER_LOCATION)) {
+                String altServerDllPath = Paths.get(ServerOptions.ALT_SERVER_LOCATION, "Raven.Server.dll").toString();
+                if (new File(altServerDllPath).exists()) {
+                    serverDllFound = true;
+                    serverDllPath = altServerDllPath;
+                }
             }
 
-            throw new IllegalStateException("Unable to execute server. " + System.lineSeparator()
-                    + "Command was: " + System.lineSeparator()
-                    + path
-                    + "> "
-                    + String.join(" ", processBuilder.command()), e);
+            if (!serverDllFound) {
+                throw new RavenException("Server file was not found: " + serverDllPath);
+            }
         }
 
-        return process;
+        if (StringUtils.isBlank(options.getDotNetPath())) {
+            throw new IllegalArgumentException("dotNetPath cannot be null or whitespace");
+        }
+
+        return new ExecAndFirstArgument(options.getDotNetPath(), serverDllPath);
+    }
+
+    private static final class ExecAndFirstArgument {
+        final String exec;
+        final String firstArgument;
+
+        ExecAndFirstArgument(String exec, String firstArgument) {
+            this.exec = exec;
+            this.firstArgument = firstArgument;
+        }
     }
 
     private static String toCsharpBool(boolean value) {
