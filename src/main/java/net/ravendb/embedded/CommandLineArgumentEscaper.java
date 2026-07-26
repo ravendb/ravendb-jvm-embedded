@@ -1,10 +1,5 @@
 package net.ravendb.embedded;
 
-/**
- * Escapes command-line arguments for a Windows-style {@code CreateProcess} command line.
- * Ported from the C# {@code Sparrow.Utils.CommandLineArgumentEscaper} (based on Nate McMaster's
- * implementation), so that the Java side quotes/escapes identically to RavenDB.Embedded.
- */
 public class CommandLineArgumentEscaper {
 
     public static String escapeAndConcatenate(Iterable<String> args) {
@@ -37,24 +32,19 @@ public class CommandLineArgumentEscaper {
         for (int i = 0; i < arg.length(); ++i) {
             int backslashes = 0;
 
-            // Consume all backslashes
             while (i < arg.length() && arg.charAt(i) == '\\') {
                 backslashes++;
                 i++;
             }
 
             if (i == arg.length() && isQuoted) {
-                // Escape any backslashes at the end of the arg when the argument is also quoted.
                 appendRepeated(sb, '\\', 2 * backslashes);
             } else if (i == arg.length()) {
-                // At the end of the arg, which isn't quoted, just add the backslashes.
                 appendRepeated(sb, '\\', backslashes);
             } else if (arg.charAt(i) == '"') {
-                // Escape any preceding backslashes and the quote
                 appendRepeated(sb, '\\', (2 * backslashes) + 1);
                 sb.append('"');
             } else {
-                // Output any consumed backslashes and the character
                 appendRepeated(sb, '\\', backslashes);
                 sb.append(arg.charAt(i));
             }

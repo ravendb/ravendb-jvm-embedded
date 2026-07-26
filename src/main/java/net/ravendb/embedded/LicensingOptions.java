@@ -1,10 +1,5 @@
 package net.ravendb.embedded;
 
-/**
- * Licensing configuration passed to the embedded RavenDB server.
- * Ported from the C# {@code ServerOptions.LicensingOptions}. Defaults match C# exactly:
- * {@link #eulaAccepted} is {@code false} and {@link #disableLicenseSupportCheck} is {@code true}.
- */
 @SuppressWarnings("unused")
 public class LicensingOptions {
 

@@ -23,7 +23,6 @@ public class ServerOptions {
 
     private static final String BASE_DIRECTORY = Paths.get("").toAbsolutePath().toString();
     static String DEFAULT_SERVER_LOCATION = Paths.get(BASE_DIRECTORY, "RavenDBServer").toString();
-    // ASP.NET (not Core) layout: contentFiles are extracted under 'bin' rather than the base directory.
     static String ALT_SERVER_LOCATION = Paths.get(BASE_DIRECTORY, "bin", "RavenDBServer").toString();
 
     private String frameworkVersion = "10.0.9+";

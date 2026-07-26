@@ -1,8 +1,7 @@
 package net.ravendb.embedded;
 
 /**
- * Payload for the "server process exited" notification. Mirrors the C#
- * {@code ServerProcessExitedEventArgs} marker type; currently carries no data.
+ * Payload for the "server process exited" notification.
  */
 public final class ServerProcessExitedEventArgs {
 }

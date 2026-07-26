@@ -16,6 +16,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
 import java.io.*;
+import java.lang.reflect.Field;
 import java.security.KeyStore;
 import java.lang.reflect.Method;
 import java.time.Duration;
@@ -41,8 +42,6 @@ public class EmbeddedServer implements CleanCloseable {
 
     private KeyStore _certificate;
     private KeyStore _trustStore;
-    private Duration _gracefulShutdownTimeout = Duration.ofSeconds(30);
-    private Duration _processKillTimeout = Duration.ofSeconds(5);
     private ServerOptions _serverOptions;
 
     private final List<Consumer<ServerProcessExitedEventArgs>> _serverProcessExitedHandlers = new CopyOnWriteArrayList<>();
@@ -56,8 +55,6 @@ public class EmbeddedServer implements CleanCloseable {
         ServerOptions options = ObjectUtils.firstNonNull(optionsParam, ServerOptions.INSTANCE);
 
         _serverOptions = options;
-        _gracefulShutdownTimeout = options.getGracefulShutdownTimeout();
-        _processKillTimeout = options.getProcessKillTimeout();
 
         if (options.getSecurity() != null) {
             _certificate = options.getSecurity().getClientCertificate();
@@ -79,7 +76,7 @@ public class EmbeddedServer implements CleanCloseable {
 
     /**
      * Registers a listener invoked when the server process exits (for any reason, including
-     * a crash or an explicit stop/restart). Mirrors the C# {@code ServerProcessExited} event.
+     * a crash or an explicit stop/restart).
      */
     @SuppressWarnings("unused")
     public void addServerProcessExitedListener(Consumer<ServerProcessExitedEventArgs> handler) {
@@ -94,8 +91,7 @@ public class EmbeddedServer implements CleanCloseable {
     }
 
     /**
-     * Returns the OS process id of the running server. Requires Java 9+ at runtime
-     * (uses {@code Process.pid()} reflectively so the library still compiles against Java 8).
+     * Returns the OS process id of the running server.
      */
     @SuppressWarnings("unused")
     public long getServerProcessId() {
@@ -109,7 +105,6 @@ public class EmbeddedServer implements CleanCloseable {
 
     /**
      * Gracefully stops the server process without disposing the created document stores.
-     * Mirrors the C# {@code StopServerAsync}.
      */
     @SuppressWarnings("unused")
     public void stopServer() {
@@ -127,7 +122,6 @@ public class EmbeddedServer implements CleanCloseable {
 
     /**
      * Stops the current server process and starts a fresh one with the original options.
-     * Mirrors the C# {@code RestartServerAsync}.
      */
     @SuppressWarnings("unused")
     public void restartServer() {
@@ -150,13 +144,26 @@ public class EmbeddedServer implements CleanCloseable {
     }
 
     private static long getProcessId(Process process) {
+        //Java 9+
         try {
-            // Process.pid() was added in Java 9; call it reflectively to keep Java 8 source compatibility.
             Method pidMethod = Process.class.getMethod("pid");
-            Object pid = pidMethod.invoke(process);
-            return ((Number) pid).longValue();
-        } catch (NoSuchMethodException e) {
-            throw new RavenException("getServerProcessId() requires Java 9 or newer at runtime.", e);
+            return ((Number) pidMethod.invoke(process)).longValue();
+        } catch (NoSuchMethodException runningOnJava8) {
+            // fall through to the Java 8 fallback below
+        } catch (Exception e) {
+            throw new RavenException("Unable to determine the server process id: " + e.getMessage(), e);
+        }
+
+        // Fallback for Java 8+ compatibility.
+        try {
+            Field pidField = process.getClass().getDeclaredField("pid");
+            pidField.setAccessible(true);
+            return ((Number) pidField.get(process)).longValue();
+        } catch (NoSuchFieldException windowsProcessImpl) {
+            // Windows ProcessImpl only has a native 'handle', not a pid.
+            throw new RavenException(
+                    "getServerProcessId() on Java 8 is only supported on Unix-like systems. " +
+                            "Run on Java 9+ for cross-platform support.", windowsProcessImpl);
         } catch (Exception e) {
             throw new RavenException("Unable to determine the server process id: " + e.getMessage(), e);
         }
@@ -241,6 +248,9 @@ public class EmbeddedServer implements CleanCloseable {
             return;
         }
 
+        Duration gracefulShutdownTimeout = _serverOptions.getGracefulShutdownTimeout();
+        Duration processKillTimeout = _serverOptions.getProcessKillTimeout();
+
         //noinspection SynchronizationOnLocalVariableOrMethodParameter
         synchronized (process) {
             if (!process.isAlive()) {
@@ -257,12 +267,12 @@ public class EmbeddedServer implements CleanCloseable {
                     writer.println("shutdown no-confirmation");
                 }
 
-                if (process.waitFor(_gracefulShutdownTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                if (process.waitFor(gracefulShutdownTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
                     return;
                 }
             } catch (Exception e) {
                 if (logger.isInfoEnabled()) {
-                    logger.info("Failed to gracefully shutdown server in " + _gracefulShutdownTimeout.toString(), e);
+                    logger.info("Failed to gracefully shutdown server in " + gracefulShutdownTimeout.toString(), e);
                 }
             }
 
@@ -272,8 +282,8 @@ public class EmbeddedServer implements CleanCloseable {
                 }
 
                 Process killed = process.destroyForcibly();
-                if (!killed.waitFor(_processKillTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                    logger.warn("Server process did not terminate within " + _processKillTimeout + " after a forced kill.");
+                if (!killed.waitFor(processKillTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                    logger.warn("Server process did not terminate within " + processKillTimeout + " after a forced kill.");
                 }
             } catch (Exception e) {
                 if (logger.isInfoEnabled()) {
@@ -313,7 +323,6 @@ public class EmbeddedServer implements CleanCloseable {
             throw e;
         }
 
-        // Watch for the server process exiting (crash or explicit stop/restart) and notify listeners.
         Thread exitWatcher = new Thread(() -> {
             try {
                 process.waitFor();
@@ -344,7 +353,6 @@ public class EmbeddedServer implements CleanCloseable {
         CompletableFuture<String> urlFuture = new CompletableFuture<>();
         CompletableFuture<Void> stderrEndFuture = new CompletableFuture<>();
 
-        // Drain stdout for the whole process lifetime; complete urlFuture when the server announces its URL.
         Thread stdoutReader = new Thread(() -> {
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(stdoutStream))) {
                 String line;
@@ -364,7 +372,6 @@ public class EmbeddedServer implements CleanCloseable {
         }, "RavenDB Embedded stdout reader");
         stdoutReader.setDaemon(true);
 
-        // Drain stderr for the whole process lifetime; complete stderrEndFuture when the stream ends (process exit).
         Thread stderrReader = new Thread(() -> {
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(stderrStream))) {
                 String line;
@@ -385,7 +392,6 @@ public class EmbeddedServer implements CleanCloseable {
         stderrReader.start();
 
         try {
-            // Race: server ready (stdout URL) vs. server died (stderr stream ended) vs. startup timeout.
             CompletableFuture.anyOf(urlFuture, stderrEndFuture).get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             String stdout = snapshot(stdoutBuilder, stdoutLock);
@@ -403,8 +409,6 @@ public class EmbeddedServer implements CleanCloseable {
             return urlFuture.getNow(null);
         }
 
-        // stderr stream ended before the URL appeared: allow a short grace for trailing error lines,
-        // but if the URL shows up during that window, treat startup as successful.
         try {
             return urlFuture.get(5, TimeUnit.SECONDS);
         } catch (TimeoutException | ExecutionException e) {

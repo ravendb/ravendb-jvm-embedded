@@ -54,8 +54,6 @@ class RavenServerRunner {
         String exec = execAndFirstArgument.exec;
         String firstArgument = execAndFirstArgument.firstArgument;
 
-        // User-provided arguments come first so that library arguments (added below) win on
-        // duplicate keys — the server takes the last occurrence of a key. Matches C#.
         List<String> commandLineArgs = new ArrayList<>(options.getCommandLineArgs());
 
         commandLineArgs.add("--Embedded.ParentProcessId=" + getProcessId("0"));
@@ -114,7 +112,6 @@ class RavenServerRunner {
         commandLineArgs.add("--ServerUrl=" + options.getServerUrl());
 
         if (firstArgument != null) {
-            // dotnet + Raven.Server.dll: the dll path is the first argument, --fx-version precedes it.
             commandLineArgs.add(0, CommandLineArgumentEscaper.escapeSingleArg(firstArgument));
 
             if (StringUtils.isNotBlank(options.getFrameworkVersion())) {
@@ -133,7 +130,6 @@ class RavenServerRunner {
         String nativeExec = Paths.get(options.getTargetServerLocation(), nativeExecName).toString();
 
         if (new File(nativeExec).exists()) {
-            // Self-contained server executable: run it directly, without dotnet and without --fx-version.
             return new ExecAndFirstArgument(nativeExec, null);
         }
 
@@ -172,7 +168,6 @@ class RavenServerRunner {
     }
 
     private static String toCsharpBool(boolean value) {
-        // Match C# bool.ToString(): capitalized "True"/"False".
         return value ? "True" : "False";
     }
 
@@ -187,7 +182,6 @@ class RavenServerRunner {
         try {
             return Long.toString(Long.parseLong(jvmName.substring(0, index)));
         } catch (NumberFormatException e) {
-            // ignore
         }
         return fallback;
     }
