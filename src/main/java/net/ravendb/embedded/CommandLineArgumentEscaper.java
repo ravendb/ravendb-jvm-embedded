@@ -1,5 +1,11 @@
 package net.ravendb.embedded;
 
+/**
+ * Quoting rules for a single Windows command-line string. Used only to render human-readable
+ * diagnostics (the {@code "Command was: "} message); it must <b>not</b> be applied to arguments
+ * passed to {@link ProcessBuilder}, which escapes them itself - see
+ * {@link RavenServerRunner#buildCommandLine(ServerOptions)}.
+ */
 public class CommandLineArgumentEscaper {
 
     public static String escapeAndConcatenate(Iterable<String> args) {

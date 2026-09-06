@@ -31,12 +31,20 @@ class RavenServerRunner {
                     + "Command was: " + System.lineSeparator()
                     + path
                     + "> "
-                    + String.join(" ", processBuilder.command()), e);
+                    + CommandLineArgumentEscaper.escapeAndConcatenate(processBuilder.command()), e);
         }
 
         return process;
     }
 
+    /**
+     * Builds the argument list handed to {@link ProcessBuilder}, which does platform-correct argv
+     * construction on its own. Values must therefore be added <b>raw</b>: do not run them through
+     * {@link CommandLineArgumentEscaper} here. C# escapes because it joins everything into a single
+     * {@code Arguments} string; doing the same on this path splits whitespace values on Windows and
+     * leaks literal quote characters on Unix. Covered by
+     * {@code RavenServerRunnerTest.whitespaceArgumentsSurviveProcessBuilderUnsplit}.
+     */
     static List<String> buildCommandLine(ServerOptions options) {
         if (StringUtils.isBlank(options.getTargetServerLocation())) {
             throw new IllegalArgumentException("targetServerLocation cannot be null or whitespace");
@@ -65,9 +73,9 @@ class RavenServerRunner {
             }
 
             if (StringUtils.isNotBlank(licensing.getLicense())) {
-                commandLineArgs.add("--License=" + CommandLineArgumentEscaper.escapeSingleArg(licensing.getLicense()));
+                commandLineArgs.add("--License=" + licensing.getLicense());
             } else if (StringUtils.isNotBlank(licensing.getLicensePath())) {
-                commandLineArgs.add("--License.Path=" + CommandLineArgumentEscaper.escapeSingleArg(licensing.getLicensePath()));
+                commandLineArgs.add("--License.Path=" + licensing.getLicensePath());
             }
 
             commandLineArgs.add("--License.Eula.Accepted=" + toCsharpBool(licensing.isEulaAccepted()));
@@ -79,8 +87,8 @@ class RavenServerRunner {
 
         commandLineArgs.add("--Setup.Mode=None");
 
-        commandLineArgs.add("--DataDir=" + CommandLineArgumentEscaper.escapeSingleArg(options.getDataDirectory()));
-        commandLineArgs.add("--Logs.Path=" + CommandLineArgumentEscaper.escapeSingleArg(options.getLogsPath()));
+        commandLineArgs.add("--DataDir=" + options.getDataDirectory());
+        commandLineArgs.add("--Logs.Path=" + options.getLogsPath());
 
         if (options.getSecurity() != null) {
             if (StringUtils.isBlank(options.getServerUrl())) {
@@ -88,21 +96,20 @@ class RavenServerRunner {
             }
 
             if (options.getSecurity().getCertificatePath() != null) {
-                commandLineArgs.add("--Security.Certificate.Path=" + CommandLineArgumentEscaper.escapeSingleArg(options.getSecurity().getCertificatePath()));
+                commandLineArgs.add("--Security.Certificate.Path=" + options.getSecurity().getCertificatePath());
 
                 if (options.getSecurity().getCertificatePassword() != null) {
                     commandLineArgs.add("--Security.Certificate.Password="
-                            + CommandLineArgumentEscaper.escapeSingleArg(String.valueOf(options.getSecurity().getCertificatePassword())));
+                            + String.valueOf(options.getSecurity().getCertificatePassword()));
                 }
             } else {
-                commandLineArgs.add("--Security.Certificate.Load.Exec=" + CommandLineArgumentEscaper.escapeSingleArg(options.getSecurity().getCertificateExec()));
-                commandLineArgs.add("--Security.Certificate.Load.Exec.Arguments=" + CommandLineArgumentEscaper.escapeSingleArg(options.getSecurity().getCertificateArguments()));
+                commandLineArgs.add("--Security.Certificate.Load.Exec=" + options.getSecurity().getCertificateExec());
+                commandLineArgs.add("--Security.Certificate.Load.Exec.Arguments=" + options.getSecurity().getCertificateArguments());
             }
 
             commandLineArgs.add("--Security.WellKnownCertificates.Admin="
-                    + CommandLineArgumentEscaper.escapeSingleArg(
-                            CertificateUtils.extractThumbprintFromCertificate(
-                                    options.getSecurity().getClientCertificate())));
+                    + CertificateUtils.extractThumbprintFromCertificate(
+                            options.getSecurity().getClientCertificate()));
         } else {
             if (StringUtils.isBlank(options.getServerUrl())) {
                 options.setServerUrl("http://127.0.0.1:0");
@@ -112,7 +119,7 @@ class RavenServerRunner {
         commandLineArgs.add("--ServerUrl=" + options.getServerUrl());
 
         if (firstArgument != null) {
-            commandLineArgs.add(0, CommandLineArgumentEscaper.escapeSingleArg(firstArgument));
+            commandLineArgs.add(0, firstArgument);
 
             if (StringUtils.isNotBlank(options.getFrameworkVersion())) {
                 String frameworkVersion = RuntimeFrameworkVersionMatcher.match(options);

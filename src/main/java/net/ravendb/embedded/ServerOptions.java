@@ -25,7 +25,7 @@ public class ServerOptions {
     static String DEFAULT_SERVER_LOCATION = Paths.get(BASE_DIRECTORY, "RavenDBServer").toString();
     static String ALT_SERVER_LOCATION = Paths.get(BASE_DIRECTORY, "bin", "RavenDBServer").toString();
 
-    private String frameworkVersion = "10.0.9+";
+    private String frameworkVersion = "10.0.11+";
 
     private String logsPath = Paths.get(BASE_DIRECTORY, "RavenDB", "Logs").toString();
     private String dataDirectory = Paths.get(BASE_DIRECTORY, "RavenDB").toString();
