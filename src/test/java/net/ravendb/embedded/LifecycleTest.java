@@ -2,22 +2,22 @@ package net.ravendb.embedded;
 
 import net.ravendb.client.primitives.CleanCloseable;
 import net.ravendb.client.primitives.Reference;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
+import java.io.File;
 import java.nio.file.Paths;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Integration test for the server lifecycle APIs. Requires the RavenDB server payload under
- * {@code target/nuget/...} (run {@code mvn generate-resources}) and a JRE 9+ at runtime for
- * {@link EmbeddedServer#getServerProcessId()}. Disabled by default like the other server-spinning tests.
+ * {@code target/nuget/...} (produced by {@code mvn generate-resources}) and a JRE 9+ at runtime for
+ * {@link EmbeddedServer#getServerProcessId()}. Skipped - not silently disabled - when either is missing.
  */
-@Disabled("requires the RavenDB server binary and a JRE 9+; run locally")
 public class LifecycleTest {
 
     private static ServerOptions options(String tempDir) {
@@ -31,6 +31,11 @@ public class LifecycleTest {
 
     @Test
     public void processIdRestartAndExitListener() throws Exception {
+        assumeTrue(new File(CopyServerFromNugetProvider.SERVER_FILES).isDirectory(),
+                "RavenDB server payload missing - run `mvn generate-resources`");
+        assumeTrue(!System.getProperty("java.specification.version").startsWith("1."),
+                "getServerProcessId() needs Process.pid() (JRE 9+)");
+
         Reference<String> tempDir = new Reference<>();
         try (CleanCloseable context = DirUtils.withTemporaryDir(tempDir)) {
             try (EmbeddedServer embedded = new EmbeddedServer()) {
