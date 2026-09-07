@@ -1,0 +1,50 @@
+name: tests/jvm-embedded
+
+on:
+  push:
+    branches: [ v7.2 ]
+  pull_request:
+    branches: [ v7.2 ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      matrix:
+        java-version: [8, 11, 14, 16, 17, 21]
+      fail-fast: false
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up JDK ${{ matrix.java-version }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ matrix.java-version }}
+        distribution: "zulu"
+        cache: maven
+
+    - name: Resolve .NET version from ServerOptions
+      id: fx
+      run: |
+        constraint=$(sed -n 's/.*private String frameworkVersion[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+          src/main/java/net/ravendb/embedded/ServerOptions.java)
+        if [ -z "$constraint" ]; then
+          echo "::error::Could not read frameworkVersion from ServerOptions.java"
+          exit 1
+        fi
+        band=$(printf '%s' "$constraint" | tr -d '+' | cut -d. -f1-2)
+        case "$band" in *x*) sdk="${band%%.*}.x" ;; *) sdk="$band.x" ;; esac
+        echo "frameworkVersion=$constraint -> dotnet-version=$sdk"
+        echo "sdk=$sdk" >> "$GITHUB_OUTPUT"
+
+    - name: Set up .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ steps.fx.outputs.sdk }}
+
+    - name: Run Maven Tests
+      run: mvn -B --no-transfer-progress clean test
