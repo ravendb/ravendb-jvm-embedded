@@ -27,6 +27,8 @@ public class RavenServerRunnerTest {
     private static final String LICENSE_JSON =
             "{\"Id\":\"a1b2\",\"Name\":\"Bogus Corp Ltd\",\"Keys\":[\"AAAABBBBCCCC\"]}";
 
+    private static final String TRAILING_BACKSLASH_ARG = "--Security.Certificate.Exec.Path=C:\\raven certs\\\\";
+
     private static ServerOptions optionsFor(Path serverDir) {
         ServerOptions options = new ServerOptions();
         options.setTargetServerLocation(serverDir.toString());
@@ -251,6 +253,74 @@ public class RavenServerRunnerTest {
         List<String> received = runArgPrinter(cmd.subList(1, cmd.size()));
 
         assertThat(received).contains(userArg);
+    }
+
+    /**
+     * A value that both contains whitespace and ends with backslashes is the other shape Windows
+     * mangles: ProcessBuilder wraps it in quotes, and on Java 8 doubles at most one of the trailing
+     * backslashes - so the last one escapes the closing quote and the value swallows the argument
+     * after it (verified on 8u202: {@code --DataDir2=C:\raven data\" --tail=marker} arrived as one
+     * argument). Java 9+ doubles them all itself. Pins the decision, because the round trip below
+     * cannot fail on a modern JVM.
+     */
+    @Test
+    public void trailingBackslashWithWhitespaceIsPreQuotedOnWindows(@TempDir Path serverDir) throws IOException {
+        assumeTrue(SystemUtils.IS_OS_WINDOWS, "the escape pass is Windows-only");
+
+        Files.createFile(serverDir.resolve("Raven.Server.dll"));
+        ServerOptions options = optionsFor(serverDir);
+        options.setDotNetPath("dotnet");
+        options.getCommandLineArgs().add(TRAILING_BACKSLASH_ARG);
+
+        String previous = System.getProperty(ALLOW_AMBIGUOUS_COMMANDS);
+        System.clearProperty(ALLOW_AMBIGUOUS_COMMANDS); // ProcessBuilder's default mode
+        try {
+            List<String> cmd = RavenServerRunner.buildCommandLine(options);
+
+            assertThat(indexOfArgStartingWith(cmd, "\"--Security.Certificate.Exec.Path="))
+                    .as("a whitespace + trailing backslash value must be pre-quoted")
+                    .isGreaterThanOrEqualTo(0);
+            assertThat(cmd).doesNotContain(TRAILING_BACKSLASH_ARG);
+        } finally {
+            restoreProperty(ALLOW_AMBIGUOUS_COMMANDS, previous);
+        }
+    }
+
+    @Test
+    public void trailingBackslashWithWhitespaceSurvivesProcessBuilderIntact(@TempDir Path serverDir) throws Exception {
+        Files.createFile(serverDir.resolve("Raven.Server.dll"));
+        ServerOptions options = optionsFor(serverDir);
+        options.setDotNetPath("dotnet");
+        options.getCommandLineArgs().add(TRAILING_BACKSLASH_ARG);
+
+        List<String> cmd = RavenServerRunner.buildCommandLine(options);
+        List<String> received = runArgPrinter(cmd.subList(1, cmd.size()));
+
+        // the argument itself, and the one behind it, both reach the child intact
+        assertThat(received).contains(TRAILING_BACKSLASH_ARG, "--Setup.Mode=None");
+    }
+
+    /**
+     * The counterpart in strict mode, which doubles trailing backslashes itself: pre-escaping there
+     * doubles them twice over, and the child receives four backslashes instead of two.
+     */
+    @Test
+    public void trailingBackslashWithWhitespaceSurvivesInStrictQuotingMode(@TempDir Path serverDir) throws Exception {
+        Files.createFile(serverDir.resolve("Raven.Server.dll"));
+        ServerOptions options = optionsFor(serverDir);
+        options.setDotNetPath("dotnet");
+        options.getCommandLineArgs().add(TRAILING_BACKSLASH_ARG);
+
+        String previous = System.getProperty(ALLOW_AMBIGUOUS_COMMANDS);
+        System.setProperty(ALLOW_AMBIGUOUS_COMMANDS, "false");
+        try {
+            List<String> cmd = RavenServerRunner.buildCommandLine(options);
+            List<String> received = runArgPrinter(cmd.subList(1, cmd.size()));
+
+            assertThat(received).contains(TRAILING_BACKSLASH_ARG, "--Setup.Mode=None");
+        } finally {
+            restoreProperty(ALLOW_AMBIGUOUS_COMMANDS, previous);
+        }
     }
 
     @Test

@@ -119,28 +119,36 @@ class RavenServerRunner {
             }
         }
 
-        escapeEmbeddedQuotesOnWindows(commandLineArgs);
+        escapeUnsafeArgumentsOnWindows(commandLineArgs);
 
         commandLineArgs.add(0, exec);
 
         return commandLineArgs;
     }
 
-    private static void escapeEmbeddedQuotesOnWindows(List<String> args) {
-        if (!SystemUtils.IS_OS_WINDOWS || processBuilderEscapesQuotesItself()) {
+    private static void escapeUnsafeArgumentsOnWindows(List<String> args) {
+        if (!SystemUtils.IS_OS_WINDOWS || processBuilderEscapesArgumentsItself()) {
             return;
         }
 
         for (int i = 0; i < args.size(); i++) {
             String arg = args.get(i);
-            if (arg != null && arg.indexOf('"') >= 0) {
+            if (arg != null && needsPreEscaping(arg)) {
                 args.set(i, CommandLineArgumentEscaper.escapeSingleArg(arg));
             }
         }
     }
 
-    private static boolean processBuilderEscapesQuotesItself() {
-        // Java 8 eats embedded quotes in every mode
+    private static boolean needsPreEscaping(String arg) {
+        if (arg.indexOf('"') >= 0) {
+            return true;
+        }
+
+        return arg.endsWith("\\") && CommandLineArgumentEscaper.containsWhitespace(arg);
+    }
+
+    private static boolean processBuilderEscapesArgumentsItself() {
+        // Java 8 eats embedded quotes in every mode, and doubles at most one trailing backslash
         if ("1.8".equals(System.getProperty("java.specification.version"))) {
             return false;
         }

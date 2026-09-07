@@ -71,7 +71,7 @@ public class CommandLineArgumentEscaper {
         return argument.charAt(0) == '"' && argument.charAt(argument.length() - 1) == '"';
     }
 
-    private static boolean containsWhitespace(String argument) {
+    static boolean containsWhitespace(String argument) {
         return argument.indexOf(' ') >= 0 || argument.indexOf('\t') >= 0 || argument.indexOf('\n') >= 0;
     }
 }
