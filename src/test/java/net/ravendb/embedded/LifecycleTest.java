@@ -5,12 +5,16 @@ import net.ravendb.client.primitives.Reference;
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
+import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.nio.file.Paths;
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -64,6 +68,39 @@ public class LifecycleTest {
 
                 assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
                 assertThat(exited.get()).isTrue();
+            }
+        }
+    }
+
+    /**
+     * A server that dies while booting must notify exit listeners as well - the watcher is started
+     * before the startup handshake, the way C# subscribes to {@code Process.Exited} before waiting
+     * for the URL. The boot is forced to fail by pointing the server at a port this test holds.
+     */
+    @Test
+    public void exitListenerFiresWhenServerDiesDuringStartup() throws Exception {
+        assumeTrue(new File(CopyServerFromNugetProvider.SERVER_FILES).isDirectory(),
+                "RavenDB server payload missing - run `mvn generate-resources`");
+
+        Reference<String> tempDir = new Reference<>();
+        try (CleanCloseable context = DirUtils.withTemporaryDir(tempDir);
+             ServerSocket occupied = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+
+            ServerOptions serverOptions = options(tempDir.value);
+            serverOptions.setServerUrl("http://127.0.0.1:" + occupied.getLocalPort());
+            serverOptions.setMaxServerStartupTimeDuration(Duration.ofSeconds(30));
+
+            CountDownLatch exited = new CountDownLatch(1);
+
+            try (EmbeddedServer embedded = new EmbeddedServer()) {
+                embedded.addServerProcessExitedListener(args -> exited.countDown());
+
+                assertThatThrownBy(() -> embedded.startServer(serverOptions))
+                        .isInstanceOf(RuntimeException.class);
+
+                assertThat(exited.await(30, TimeUnit.SECONDS))
+                        .as("a boot failure must reach the exit listeners")
+                        .isTrue();
             }
         }
     }

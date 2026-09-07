@@ -36,7 +36,9 @@ public class EmbeddedServer implements CleanCloseable {
 
     private static final Log logger = LogFactory.getLog(EmbeddedServer.class);
 
-    private final AtomicReference<Lazy<Tuple<String, Process>>> _serverTask = new AtomicReference<>();
+    private final AtomicReference<FailureCachingLazy<Tuple<String, Process>>> _serverTask = new AtomicReference<>();
+
+    private final AtomicReference<Thread> _shutdownHook = new AtomicReference<>();
 
     private final ConcurrentMap<String, Lazy<IDocumentStore>> _documentStores = new ConcurrentHashMap<>();
 
@@ -65,7 +67,7 @@ public class EmbeddedServer implements CleanCloseable {
     }
 
     private void startServerInternal(ServerOptions options) {
-        Lazy<Tuple<String, Process>> startServer = new Lazy<>(() -> runServer(options));
+        FailureCachingLazy<Tuple<String, Process>> startServer = new FailureCachingLazy<>(() -> runServer(options));
 
         if (!_serverTask.compareAndSet(null, startServer)) {
             throw new IllegalStateException("The server was already started");
@@ -95,7 +97,7 @@ public class EmbeddedServer implements CleanCloseable {
      */
     @SuppressWarnings("unused")
     public long getServerProcessId() {
-        Lazy<Tuple<String, Process>> server = _serverTask.get();
+        FailureCachingLazy<Tuple<String, Process>> server = _serverTask.get();
         if (server == null) {
             throw new IllegalStateException("Please run startServer() before trying to use the server.");
         }
@@ -108,13 +110,15 @@ public class EmbeddedServer implements CleanCloseable {
      */
     @SuppressWarnings("unused")
     public void stopServer() {
-        Lazy<Tuple<String, Process>> existing = _serverTask.get();
-        if (_serverOptions == null || existing == null || !existing.isValueCreated()) {
+        FailureCachingLazy<Tuple<String, Process>> existing = _serverTask.get();
+        if (_serverOptions == null || existing == null || !existing.isEvaluated()) {
             throw new IllegalStateException("Cannot call stopServer() before calling startServer().");
         }
 
+        Process process = existing.getValue().second;
+
         try {
-            shutdownServerProcess(existing.getValue().second);
+            shutdownServerProcess(process);
         } catch (Exception e) {
             // ignore - the process might already be dead, we failed to start, etc.
         }
@@ -125,8 +129,8 @@ public class EmbeddedServer implements CleanCloseable {
      */
     @SuppressWarnings("unused")
     public void restartServer() {
-        Lazy<Tuple<String, Process>> existing = _serverTask.get();
-        if (_serverOptions == null || existing == null || !existing.isValueCreated()) {
+        FailureCachingLazy<Tuple<String, Process>> existing = _serverTask.get();
+        if (_serverOptions == null || existing == null || !existing.isEvaluated()) {
             throw new IllegalStateException("Cannot call restartServer() before calling startServer().");
         }
 
@@ -235,12 +239,12 @@ public class EmbeddedServer implements CleanCloseable {
     }
 
     public String getServerUri() {
-        AtomicReference<Lazy<Tuple<String, Process>>> server = _serverTask;
-        if (server.get() == null) {
+        FailureCachingLazy<Tuple<String, Process>> server = _serverTask.get();
+        if (server == null) {
             throw new IllegalStateException("Please run startServer() before trying to use the server.");
         }
 
-        return server.get().getValue().first;
+        return server.getValue().first;
     }
 
     private void shutdownServerProcess(Process process) {
@@ -311,7 +315,8 @@ public class EmbeddedServer implements CleanCloseable {
             logger.info("Starting global server");
         }
 
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> shutdownServerProcess(process)));
+        registerShutdownHook(process);
+        watchForProcessExit(process);
 
         Duration timeout = options.getMaxServerStartupTimeDuration();
 
@@ -323,6 +328,39 @@ public class EmbeddedServer implements CleanCloseable {
             throw e;
         }
 
+        return Tuple.create(url, process);
+    }
+
+    /**
+     * Keeps a single hook per instance: a restart replaces the previous process' hook instead of
+     * leaving one behind per start.
+     */
+    private void registerShutdownHook(Process process) {
+        Thread hook = new Thread(() -> shutdownServerProcess(process), "RavenDB Embedded shutdown hook");
+
+        Thread previous = _shutdownHook.getAndSet(hook);
+        Runtime.getRuntime().addShutdownHook(hook);
+
+        removeShutdownHook(previous);
+    }
+
+    private void removeShutdownHook(Thread hook) {
+        if (hook == null) {
+            return;
+        }
+
+        try {
+            Runtime.getRuntime().removeShutdownHook(hook);
+        } catch (IllegalStateException shutdownInProgress) {
+            // the JVM is already going down - the hook is about to run and will find a dead process
+        }
+    }
+
+    /**
+     * Started before the startup handshake, so a server that dies while booting still notifies
+     * listeners - C# subscribes to {@code Process.Exited} before waiting for the URL too.
+     */
+    private void watchForProcessExit(Process process) {
         Thread exitWatcher = new Thread(() -> {
             try {
                 process.waitFor();
@@ -334,8 +372,6 @@ public class EmbeddedServer implements CleanCloseable {
         }, "RavenDB Embedded exit watcher");
         exitWatcher.setDaemon(true);
         exitWatcher.start();
-
-        return Tuple.create(url, process);
     }
 
     static String awaitServerUrl(InputStream stdoutStream, InputStream stderrStream, Duration timeout) {
@@ -469,13 +505,16 @@ public class EmbeddedServer implements CleanCloseable {
 
     @Override
     public void close() {
-        Lazy<Tuple<String, Process>> lazy = _serverTask.getAndSet(null);
-        if (lazy == null || !lazy.isValueCreated()) {
+        FailureCachingLazy<Tuple<String, Process>> lazy = _serverTask.getAndSet(null);
+        if (lazy == null || !lazy.isEvaluated()) {
             return;
         }
 
-        Process process = lazy.getValue().second;
-        shutdownServerProcess(process);
+        if (lazy.hasValue()) {
+            shutdownServerProcess(lazy.getValue().second);
+        }
+
+        removeShutdownHook(_shutdownHook.getAndSet(null));
 
         for (Map.Entry<String, Lazy<IDocumentStore>> item : _documentStores.entrySet()) {
             if (item.getValue().isValueCreated()) {
