@@ -140,6 +140,11 @@ class RavenServerRunner {
     }
 
     private static boolean processBuilderEscapesQuotesItself() {
+        // Java 8 eats embedded quotes in every mode
+        if ("1.8".equals(System.getProperty("java.specification.version"))) {
+            return false;
+        }
+        
         String value = System.getProperty("jdk.lang.Process.allowAmbiguousCommands");
         if (value == null) {
             return isSecurityManagerPresent();

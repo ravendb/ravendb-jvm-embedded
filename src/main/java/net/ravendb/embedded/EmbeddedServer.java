@@ -338,12 +338,6 @@ public class EmbeddedServer implements CleanCloseable {
         return Tuple.create(url, process);
     }
 
-    /**
-     * Reads the server's stdout/stderr on dedicated threads (which keep draining for the process lifetime),
-     * and returns the announced server URL. Throws {@link ServerStartupTimeoutException} if the URL does not
-     * appear within {@code timeout}, or {@link IllegalStateException} if the server dies during startup.
-     * The caller is responsible for terminating the process on failure.
-     */
     static String awaitServerUrl(InputStream stdoutStream, InputStream stderrStream, Duration timeout) {
         StringBuilder stdoutBuilder = new StringBuilder();
         StringBuilder stderrBuilder = new StringBuilder();

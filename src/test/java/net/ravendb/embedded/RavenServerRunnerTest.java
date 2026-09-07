@@ -16,10 +16,13 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 public class RavenServerRunnerTest {
 
     private static final String ALLOW_AMBIGUOUS_COMMANDS = "jdk.lang.Process.allowAmbiguousCommands";
+
+    private static final String SPEC_VERSION = "java.specification.version";
 
     private static final String LICENSE_JSON =
             "{\"Id\":\"a1b2\",\"Name\":\"Bogus Corp Ltd\",\"Keys\":[\"AAAABBBBCCCC\"]}";
@@ -31,6 +34,14 @@ public class RavenServerRunnerTest {
         options.setLogsPath(serverDir.resolve("logs").toString());
         options.setFrameworkVersion(null); // avoid invoking the `dotnet --info` probe in unit tests
         return options;
+    }
+
+    private static void restoreProperty(String key, String previous) {
+        if (previous == null) {
+            System.clearProperty(key);
+        } else {
+            System.setProperty(key, previous);
+        }
     }
 
     private static int indexOfArgStartingWith(List<String> args, String prefix) {
@@ -159,11 +170,7 @@ public class RavenServerRunnerTest {
 
             assertThat(received).contains("--License=" + LICENSE_JSON);
         } finally {
-            if (previous == null) {
-                System.clearProperty(ALLOW_AMBIGUOUS_COMMANDS);
-            } else {
-                System.setProperty(ALLOW_AMBIGUOUS_COMMANDS, previous);
-            }
+            restoreProperty(ALLOW_AMBIGUOUS_COMMANDS, previous);
         }
     }
 
@@ -187,11 +194,42 @@ public class RavenServerRunnerTest {
 
             assertThat(received).contains("--License=" + LICENSE_JSON);
         } finally {
-            if (previous == null) {
-                System.clearProperty(ALLOW_AMBIGUOUS_COMMANDS);
-            } else {
-                System.setProperty(ALLOW_AMBIGUOUS_COMMANDS, previous);
-            }
+            restoreProperty(ALLOW_AMBIGUOUS_COMMANDS, previous);
+        }
+    }
+
+    /**
+     * Java 8 eats embedded quotes in <i>every</i> mode - its strict path predates the self-escaping
+     * verification - so the pre-escape must never be skipped there. On a real Java 8 JVM
+     * licenseJsonSurvivesProcessBuilderInStrictQuotingMode already covers this by round trip; this
+     * pins the decision on newer JVMs, where that combination cannot be reproduced because 11+
+     * strict mode genuinely does self-escape. Asserts on the decision rather than the argv for the
+     * same reason.
+     */
+    @Test
+    public void java8NeverSkipsEscapingEvenInStrictQuotingMode(@TempDir Path serverDir) throws IOException {
+        assumeTrue(SystemUtils.IS_OS_WINDOWS, "the escape pass is Windows-only");
+
+        Files.createFile(serverDir.resolve("Raven.Server.dll"));
+        ServerOptions options = optionsFor(serverDir);
+        options.setDotNetPath("dotnet");
+        options.getLicensing().setLicense(LICENSE_JSON);
+
+        String previousMode = System.getProperty(ALLOW_AMBIGUOUS_COMMANDS);
+        String previousSpec = System.getProperty(SPEC_VERSION);
+        System.setProperty(ALLOW_AMBIGUOUS_COMMANDS, "false");
+        System.setProperty(SPEC_VERSION, "1.8");
+        try {
+            List<String> cmd = RavenServerRunner.buildCommandLine(options);
+
+            // LICENSE_JSON contains a space, so the escaped form is the whole argument in quotes
+            assertThat(indexOfArgStartingWith(cmd, "\"--License="))
+                    .as("license must still be escaped on Java 8 in strict mode")
+                    .isGreaterThanOrEqualTo(0);
+            assertThat(cmd).doesNotContain("--License=" + LICENSE_JSON);
+        } finally {
+            restoreProperty(SPEC_VERSION, previousSpec);
+            restoreProperty(ALLOW_AMBIGUOUS_COMMANDS, previousMode);
         }
     }
 
