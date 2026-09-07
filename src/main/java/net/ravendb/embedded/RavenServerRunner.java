@@ -37,14 +37,6 @@ class RavenServerRunner {
         return process;
     }
 
-    /**
-     * Builds the argument list handed to {@link ProcessBuilder}, which does platform-correct argv
-     * construction on its own. Values must therefore be added <b>raw</b>: do not run them through
-     * {@link CommandLineArgumentEscaper} here. C# escapes because it joins everything into a single
-     * {@code Arguments} string; doing the same on this path splits whitespace values on Windows and
-     * leaks literal quote characters on Unix. Covered by
-     * {@code RavenServerRunnerTest.whitespaceArgumentsSurviveProcessBuilderUnsplit}.
-     */
     static List<String> buildCommandLine(ServerOptions options) {
         if (StringUtils.isBlank(options.getTargetServerLocation())) {
             throw new IllegalArgumentException("targetServerLocation cannot be null or whitespace");
@@ -127,9 +119,43 @@ class RavenServerRunner {
             }
         }
 
+        escapeEmbeddedQuotesOnWindows(commandLineArgs);
+
         commandLineArgs.add(0, exec);
 
         return commandLineArgs;
+    }
+
+    private static void escapeEmbeddedQuotesOnWindows(List<String> args) {
+        if (!SystemUtils.IS_OS_WINDOWS || processBuilderEscapesQuotesItself()) {
+            return;
+        }
+
+        for (int i = 0; i < args.size(); i++) {
+            String arg = args.get(i);
+            if (arg != null && arg.indexOf('"') >= 0) {
+                args.set(i, CommandLineArgumentEscaper.escapeSingleArg(arg));
+            }
+        }
+    }
+
+    private static boolean processBuilderEscapesQuotesItself() {
+        String value = System.getProperty("jdk.lang.Process.allowAmbiguousCommands");
+        if (value == null) {
+            return isSecurityManagerPresent();
+        }
+
+        return "false".equalsIgnoreCase(value);
+    }
+
+    private static boolean isSecurityManagerPresent() {
+        // System.getSecurityManager() is terminally deprecated and always returns null from JDK 24.
+        // Called reflectively so a future removal cannot break this class.
+        try {
+            return System.class.getMethod("getSecurityManager").invoke(null) != null;
+        } catch (ReflectiveOperationException e) {
+            return false;
+        }
     }
 
     private static ExecAndFirstArgument getExecAndFirstArgument(ServerOptions options) {
