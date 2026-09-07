@@ -1,51 +1,52 @@
 package net.ravendb.embedded;
 
-import com.google.common.base.Stopwatch;
 import net.ravendb.client.documents.DocumentStore;
 import net.ravendb.client.documents.IDocumentStore;
 import net.ravendb.client.documents.Lazy;
 import net.ravendb.client.exceptions.ConcurrencyException;
 import net.ravendb.client.exceptions.RavenException;
 import net.ravendb.client.primitives.CleanCloseable;
-import net.ravendb.client.primitives.Reference;
 import net.ravendb.client.primitives.Tuple;
 import net.ravendb.client.serverwide.operations.CreateDatabaseOperation;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.SystemUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
-import java.awt.*;
 import java.io.*;
-import java.net.URI;
-import java.net.URISyntaxException;
+import java.lang.reflect.Field;
 import java.security.KeyStore;
+import java.lang.reflect.Method;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiFunction;
+import java.util.function.Consumer;
 
 public class EmbeddedServer implements CleanCloseable {
 
     @SuppressWarnings("unused")
     public static EmbeddedServer INSTANCE = new EmbeddedServer();
 
-    public static final String END_OF_STREAM_MARKER = "$$END_OF_STREAM$$";
-
     public EmbeddedServer() {
     }
 
     private static final Log logger = LogFactory.getLog(EmbeddedServer.class);
 
-    private final AtomicReference<Lazy<Tuple<String, Process>>> _serverTask = new AtomicReference<>();
+    private final AtomicReference<FailureCachingLazy<Tuple<String, Process>>> _serverTask = new AtomicReference<>();
+
+    private final AtomicReference<Thread> _shutdownHook = new AtomicReference<>();
 
     private final ConcurrentMap<String, Lazy<IDocumentStore>> _documentStores = new ConcurrentHashMap<>();
 
     private KeyStore _certificate;
     private KeyStore _trustStore;
-    private Duration _gracefulShutdownTimeout;
+    private ServerOptions _serverOptions;
+
+    private final List<Consumer<ServerProcessExitedEventArgs>> _serverProcessExitedHandlers = new CopyOnWriteArrayList<>();
 
     @SuppressWarnings("unused")
     public void startServer() {
@@ -55,20 +56,138 @@ public class EmbeddedServer implements CleanCloseable {
     public void startServer(ServerOptions optionsParam) {
         ServerOptions options = ObjectUtils.firstNonNull(optionsParam, ServerOptions.INSTANCE);
 
-        _gracefulShutdownTimeout = options.getGracefulShutdownTimeout();
-
-        Lazy<Tuple<String, Process>> startServer = new Lazy<>(() -> runServer(options));
-
-        if (!_serverTask.compareAndSet(null, startServer)) {
-            throw new IllegalStateException("The server was already started");
-        }
+        _serverOptions = options;
 
         if (options.getSecurity() != null) {
             _certificate = options.getSecurity().getClientCertificate();
             _trustStore = options.getSecurity().getTrustStore();
         }
 
+        startServerInternal(options);
+    }
+
+    private void startServerInternal(ServerOptions options) {
+        FailureCachingLazy<Tuple<String, Process>> startServer = new FailureCachingLazy<>(() -> runServer(options));
+
+        if (!_serverTask.compareAndSet(null, startServer)) {
+            throw new IllegalStateException("The server was already started");
+        }
+
         startServer.getValue();
+    }
+
+    /**
+     * Registers a listener invoked when the server process exits (for any reason, including
+     * a crash or an explicit stop/restart).
+     */
+    @SuppressWarnings("unused")
+    public void addServerProcessExitedListener(Consumer<ServerProcessExitedEventArgs> handler) {
+        if (handler != null) {
+            _serverProcessExitedHandlers.add(handler);
+        }
+    }
+
+    @SuppressWarnings("unused")
+    public void removeServerProcessExitedListener(Consumer<ServerProcessExitedEventArgs> handler) {
+        _serverProcessExitedHandlers.remove(handler);
+    }
+
+    /**
+     * Returns the OS process id of the running server.
+     */
+    @SuppressWarnings("unused")
+    public long getServerProcessId() {
+        FailureCachingLazy<Tuple<String, Process>> server = _serverTask.get();
+        if (server == null) {
+            throw new IllegalStateException("Please run startServer() before trying to use the server.");
+        }
+
+        return getProcessId(server.getValue().second);
+    }
+
+    /**
+     * Gracefully stops the server process without disposing the created document stores.
+     */
+    @SuppressWarnings("unused")
+    public void stopServer() {
+        FailureCachingLazy<Tuple<String, Process>> existing = _serverTask.get();
+        if (_serverOptions == null || existing == null || !existing.isEvaluated()) {
+            throw new IllegalStateException("Cannot call stopServer() before calling startServer().");
+        }
+
+        Process process = existing.getValue().second;
+
+        try {
+            shutdownServerProcess(process);
+        } catch (Exception e) {
+            // ignore - the process might already be dead, we failed to start, etc.
+        }
+    }
+
+    /**
+     * Stops the current server process and starts a fresh one with the original options.
+     */
+    @SuppressWarnings("unused")
+    public void restartServer() {
+        FailureCachingLazy<Tuple<String, Process>> existing = _serverTask.get();
+        if (_serverOptions == null || existing == null || !existing.isEvaluated()) {
+            throw new IllegalStateException("Cannot call restartServer() before calling startServer().");
+        }
+
+        try {
+            shutdownServerProcess(existing.getValue().second);
+        } catch (Exception e) {
+            // ignore - the process might already be dead, we failed to start, etc.
+        }
+
+        if (!_serverTask.compareAndSet(existing, null)) {
+            throw new IllegalStateException("The server changed while restarting it. Are you calling restartServer() concurrently?");
+        }
+
+        startServerInternal(_serverOptions);
+    }
+
+    private static long getProcessId(Process process) {
+        //Java 9+
+        try {
+            Method pidMethod = Process.class.getMethod("pid");
+            return ((Number) pidMethod.invoke(process)).longValue();
+        } catch (NoSuchMethodException runningOnJava8) {
+            // fall through to the Java 8 fallback below
+        } catch (Exception e) {
+            throw new RavenException("Unable to determine the server process id: " + e.getMessage(), e);
+        }
+
+        // Fallback for Java 8+ compatibility.
+        try {
+            Field pidField = process.getClass().getDeclaredField("pid");
+            pidField.setAccessible(true);
+            return ((Number) pidField.get(process)).longValue();
+        } catch (NoSuchFieldException windowsProcessImpl) {
+            // Windows ProcessImpl only has a native 'handle', not a pid.
+            throw new RavenException(
+                    "getServerProcessId() on Java 8 is only supported on Unix-like systems. " +
+                            "Run on Java 9+ for cross-platform support.", windowsProcessImpl);
+        } catch (Exception e) {
+            throw new RavenException("Unable to determine the server process id: " + e.getMessage(), e);
+        }
+    }
+
+    private void notifyServerProcessExited() {
+        if (_serverProcessExitedHandlers.isEmpty()) {
+            return;
+        }
+
+        ServerProcessExitedEventArgs args = new ServerProcessExitedEventArgs();
+        for (Consumer<ServerProcessExitedEventArgs> handler : _serverProcessExitedHandlers) {
+            try {
+                handler.accept(args);
+            } catch (Exception e) {
+                if (logger.isInfoEnabled()) {
+                    logger.info("A ServerProcessExited listener threw an exception.", e);
+                }
+            }
+        }
     }
 
     public IDocumentStore getDocumentStore(String database) {
@@ -120,18 +239,21 @@ public class EmbeddedServer implements CleanCloseable {
     }
 
     public String getServerUri() {
-        AtomicReference<Lazy<Tuple<String, Process>>> server = _serverTask;
-        if (server.get() == null) {
+        FailureCachingLazy<Tuple<String, Process>> server = _serverTask.get();
+        if (server == null) {
             throw new IllegalStateException("Please run startServer() before trying to use the server.");
         }
 
-        return server.get().getValue().first;
+        return server.getValue().first;
     }
 
     private void shutdownServerProcess(Process process) {
         if (process == null || !process.isAlive()) {
             return;
         }
+
+        Duration gracefulShutdownTimeout = _serverOptions.getGracefulShutdownTimeout();
+        Duration processKillTimeout = _serverOptions.getProcessKillTimeout();
 
         //noinspection SynchronizationOnLocalVariableOrMethodParameter
         synchronized (process) {
@@ -149,12 +271,12 @@ public class EmbeddedServer implements CleanCloseable {
                     writer.println("shutdown no-confirmation");
                 }
 
-                if (process.waitFor(_gracefulShutdownTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                if (process.waitFor(gracefulShutdownTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
                     return;
                 }
             } catch (Exception e) {
                 if (logger.isInfoEnabled()) {
-                    logger.info("Failed to gracefully shutdown server in " + _gracefulShutdownTimeout.toString(), e);
+                    logger.info("Failed to gracefully shutdown server in " + gracefulShutdownTimeout.toString(), e);
                 }
             }
 
@@ -163,7 +285,10 @@ public class EmbeddedServer implements CleanCloseable {
                     logger.info("Killing global server");
                 }
 
-                process.destroyForcibly().waitFor();
+                Process killed = process.destroyForcibly();
+                if (!killed.waitFor(processKillTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                    logger.warn("Server process did not terminate within " + processKillTimeout + " after a forced kill.");
+                }
             } catch (Exception e) {
                 if (logger.isInfoEnabled()) {
                     logger.info("Failed to kill server process.");
@@ -190,43 +315,156 @@ public class EmbeddedServer implements CleanCloseable {
             logger.info("Starting global server");
         }
 
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> shutdownServerProcess(process)));
+        registerShutdownHook(process);
+        watchForProcessExit(process);
 
-        Reference<String> urlRef = new Reference<>();
-        Stopwatch startupDuration = Stopwatch.createStarted();
+        Duration timeout = options.getMaxServerStartupTimeDuration();
 
-        String outputString = readOutput(process.getInputStream(), startupDuration, options, (line, builder) -> {
-
-            if (line == null) {
-                String errorString = readOutput(process.getErrorStream(), startupDuration, options, null);
-
-                shutdownServerProcess(process);
-
-                throw new IllegalStateException(buildStartupExceptionMessage(builder.toString(), errorString));
-            }
-
-            String prefix = "Server available on: ";
-            if (line.startsWith(prefix)) {
-                urlRef.value = line.substring(prefix.length());
-                return true;
-            }
-
-            return false;
-        });
-
-        if (urlRef.value == null) {
-            String errorString = readOutput(process.getErrorStream(), startupDuration, options, null);
-
+        String url;
+        try {
+            url = awaitServerUrl(process.getInputStream(), process.getErrorStream(), timeout);
+        } catch (RuntimeException e) {
             shutdownServerProcess(process);
-            throw new IllegalStateException(buildStartupExceptionMessage(outputString, errorString));
+            throw e;
         }
 
-        return Tuple.create(urlRef.value, process);
+        return Tuple.create(url, process);
     }
 
-    private static String buildStartupExceptionMessage(String outputString, String errorString) {
+    /**
+     * Keeps a single hook per instance: a restart replaces the previous process' hook instead of
+     * leaving one behind per start.
+     */
+    private void registerShutdownHook(Process process) {
+        Thread hook = new Thread(() -> shutdownServerProcess(process), "RavenDB Embedded shutdown hook");
+
+        Thread previous = _shutdownHook.getAndSet(hook);
+        Runtime.getRuntime().addShutdownHook(hook);
+
+        removeShutdownHook(previous);
+    }
+
+    private void removeShutdownHook(Thread hook) {
+        if (hook == null) {
+            return;
+        }
+
+        try {
+            Runtime.getRuntime().removeShutdownHook(hook);
+        } catch (IllegalStateException shutdownInProgress) {
+            // the JVM is already going down - the hook is about to run and will find a dead process
+        }
+    }
+
+    /**
+     * Started before the startup handshake, so a server that dies while booting still notifies
+     * listeners - C# subscribes to {@code Process.Exited} before waiting for the URL too.
+     */
+    private void watchForProcessExit(Process process) {
+        Thread exitWatcher = new Thread(() -> {
+            try {
+                process.waitFor();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            notifyServerProcessExited();
+        }, "RavenDB Embedded exit watcher");
+        exitWatcher.setDaemon(true);
+        exitWatcher.start();
+    }
+
+    static String awaitServerUrl(InputStream stdoutStream, InputStream stderrStream, Duration timeout) {
+        StringBuilder stdoutBuilder = new StringBuilder();
+        StringBuilder stderrBuilder = new StringBuilder();
+        Object stdoutLock = new Object();
+        Object stderrLock = new Object();
+
+        CompletableFuture<String> urlFuture = new CompletableFuture<>();
+        CompletableFuture<Void> stderrEndFuture = new CompletableFuture<>();
+
+        Thread stdoutReader = new Thread(() -> {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(stdoutStream))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    synchronized (stdoutLock) {
+                        stdoutBuilder.append(line).append(System.lineSeparator());
+                    }
+
+                    String prefix = "Server available on: ";
+                    if (line.startsWith(prefix)) {
+                        urlFuture.complete(line.substring(prefix.length()));
+                    }
+                }
+            } catch (IOException e) {
+                // stream closed - the process has exited
+            }
+        }, "RavenDB Embedded stdout reader");
+        stdoutReader.setDaemon(true);
+
+        Thread stderrReader = new Thread(() -> {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(stderrStream))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    synchronized (stderrLock) {
+                        stderrBuilder.append(line).append(System.lineSeparator());
+                    }
+                }
+            } catch (IOException e) {
+                // stream closed - the process has exited
+            } finally {
+                stderrEndFuture.complete(null);
+            }
+        }, "RavenDB Embedded stderr reader");
+        stderrReader.setDaemon(true);
+
+        stdoutReader.start();
+        stderrReader.start();
+
+        try {
+            CompletableFuture.anyOf(urlFuture, stderrEndFuture).get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            String stdout = snapshot(stdoutBuilder, stdoutLock);
+            String stderr = snapshot(stderrBuilder, stderrLock);
+            throw new ServerStartupTimeoutException(buildStartupExceptionMessage(stdout, stderr, true, timeout));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RavenException("Interrupted while waiting for the RavenDB Server to start", e);
+        } catch (ExecutionException e) {
+            throw new IllegalStateException(buildStartupExceptionMessage(
+                    snapshot(stdoutBuilder, stdoutLock), snapshot(stderrBuilder, stderrLock), false, timeout), e);
+        }
+
+        if (urlFuture.isDone()) {
+            return urlFuture.getNow(null);
+        }
+
+        try {
+            return urlFuture.get(5, TimeUnit.SECONDS);
+        } catch (TimeoutException | ExecutionException e) {
+            // still no URL - fall through to failure
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        String stdout = snapshot(stdoutBuilder, stdoutLock);
+        String stderr = snapshot(stderrBuilder, stderrLock);
+        throw new IllegalStateException(buildStartupExceptionMessage(stdout, stderr, false, timeout));
+    }
+
+    private static String snapshot(StringBuilder builder, Object lock) {
+        synchronized (lock) {
+            return builder.toString();
+        }
+    }
+
+    private static String buildStartupExceptionMessage(String outputString, String errorString, boolean isTimeout, Duration timeout) {
         StringBuilder sb = new StringBuilder();
-        sb.append("Unable to start the RavenDB Server");
+        if (isTimeout) {
+            sb.append("Server failed to start in ").append(timeout.getSeconds()).append(" s.");
+        } else {
+            sb.append("Unable to start the RavenDB Server");
+        }
         sb.append(System.lineSeparator());
 
         if (StringUtils.isNotBlank(errorString)) {
@@ -246,102 +484,37 @@ public class EmbeddedServer implements CleanCloseable {
         return sb.toString();
     }
 
-    private static String readOutput(InputStream output, Stopwatch startupDuration, ServerOptions options,
-                                     BiFunction<String, StringBuilder, Boolean> online) {
-
-        BufferedReader reader = new BufferedReader(new InputStreamReader(output));
-
-        BlockingQueue<String> readQueue = new ArrayBlockingQueue<>(50);
-
-        CompletableFuture.runAsync(() -> {
-            try {
-                while (true) {
-                    String line = reader.readLine();
-                    if (line != null) {
-                        readQueue.add(line);
-                    } else {
-                        readQueue.add(END_OF_STREAM_MARKER);
-                        break;
-                    }
-                }
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        });
-
-        StringBuilder sb = new StringBuilder();
-
-        try {
-            while (true) {
-                String line = readQueue.poll(5, TimeUnit.SECONDS);
-
-                if (options.getMaxServerStartupTimeDuration().minus(startupDuration.elapsed()).isNegative()) {
-                    return null;
-                }
-
-                if (line == null) {
-                    continue;
-                }
-
-                if (END_OF_STREAM_MARKER.equals(line)) {
-                    line = null;
-                }
-
-                if (line != null) {
-                    sb.append(line);
-                    sb.append(System.lineSeparator());
-                }
-
-                Reference<Boolean> shouldStop = new Reference<>(false);
-                if (online != null) {
-                    shouldStop.value = online.apply(line, sb);
-                }
-
-                if (shouldStop.value) {
-                    break;
-                }
-
-                if (line == null) {
-                    break;
-                }
-            }
-        } catch (InterruptedException e) {
-            throw new RavenException("Unable to read server output: " + e.getMessage(), e);
-        }
-
-        return sb.toString();
-    }
-
     @SuppressWarnings("unused")
     public void openStudioInBrowser() {
         String serverUrl = getServerUri();
+        String base = serverUrl.endsWith("/") ? serverUrl : serverUrl + "/";
+        String url = base + "studio/index.html?disableAnalytics=true";
 
-        if (Desktop.isDesktopSupported()) {
-            Desktop desktop = Desktop.getDesktop();
-            try {
-                desktop.browse(new URI(serverUrl));
-            } catch (IOException | URISyntaxException e) {
-                throw new RuntimeException(e);
+        try {
+            if (SystemUtils.IS_OS_WINDOWS) {
+                new ProcessBuilder("cmd", "/c", "start", "RavenDB Studio", url).start();
+            } else if (SystemUtils.IS_OS_MAC) {
+                new ProcessBuilder("open", url).start();
+            } else {
+                new ProcessBuilder("xdg-open", url).start();
             }
-        } else {
-            Runtime runtime = Runtime.getRuntime();
-            try {
-                runtime.exec("xdg-open " + serverUrl);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
+        } catch (IOException e) {
+            throw new RavenException("Unable to open the Studio in a browser: " + e.getMessage(), e);
         }
     }
 
     @Override
     public void close() {
-        Lazy<Tuple<String, Process>> lazy = _serverTask.getAndSet(null);
-        if (lazy == null || !lazy.isValueCreated()) {
+        FailureCachingLazy<Tuple<String, Process>> lazy = _serverTask.getAndSet(null);
+        if (lazy == null || !lazy.isEvaluated()) {
             return;
         }
 
-        Process process = lazy.getValue().second;
-        shutdownServerProcess(process);
+        if (lazy.hasValue()) {
+            shutdownServerProcess(lazy.getValue().second);
+        }
+
+        removeShutdownHook(_shutdownHook.getAndSet(null));
 
         for (Map.Entry<String, Lazy<IDocumentStore>> item : _documentStores.entrySet()) {
             if (item.getValue().isValueCreated()) {
