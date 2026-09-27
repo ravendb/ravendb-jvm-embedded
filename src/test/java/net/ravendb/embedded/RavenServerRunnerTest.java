@@ -6,12 +6,16 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.KeyStore;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -53,6 +57,273 @@ public class RavenServerRunnerTest {
             }
         }
         return -1;
+    }
+
+    /** Replaces a dynamic argument value, checked against {@code valuePattern}, with a placeholder. */
+    private static void normalize(List<String> args, String prefix, String valuePattern, String placeholder) {
+        int index = indexOfArgStartingWith(args, prefix);
+        assertThat(index).as("%s must be present", prefix).isGreaterThanOrEqualTo(0);
+        assertThat(args.get(index).substring(prefix.length()))
+                .as("value of %s", prefix)
+                .matches(valuePattern);
+        args.set(index, prefix + placeholder);
+    }
+
+    /** A throwaway PKCS12 holding a single self-signed entry - enough for the thumbprint lookup. */
+    private static Path generateClientCertificate(Path dir, char[] password) throws Exception {
+        Path store = dir.resolve("client.pfx");
+        String keytool = SystemUtils.IS_OS_WINDOWS ? "keytool.exe" : "keytool";
+
+        List<String> command = Arrays.asList(
+                Paths.get(System.getProperty("java.home"), "bin", keytool).toString(),
+                "-genkeypair", "-alias", "raven-embedded-test",
+                "-keyalg", "RSA", "-keysize", "2048", "-validity", "1",
+                "-dname", "CN=raven-embedded-test",
+                "-storetype", "PKCS12", "-keystore", store.toString(),
+                "-storepass", new String(password), "-keypass", new String(password));
+
+        Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append(System.lineSeparator());
+            }
+        }
+
+        assertThat(process.waitFor()).as("keytool failed: %s", output).isZero();
+        return store;
+    }
+
+    /** The same certificate re-saved under an empty password - what a passwordless PKCS12 looks like. */
+    private static Path generatePasswordlessClientCertificate(Path dir) throws Exception {
+        char[] password = "changeit".toCharArray();
+        KeyStore store = load(generateClientCertificate(dir, password), password);
+
+        Path passwordless = dir.resolve("client-nopass.pfx");
+        try (OutputStream out = Files.newOutputStream(passwordless)) {
+            store.store(out, new char[0]);
+        }
+        return passwordless;
+    }
+
+    private static KeyStore load(Path pkcs12, char[] password) throws Exception {
+        KeyStore store = KeyStore.getInstance("PKCS12");
+        try (InputStream in = Files.newInputStream(pkcs12)) {
+            store.load(in, password);
+        }
+        return store;
+    }
+
+    @Test
+    public void fullyPopulatedOptionsProduceTheExactArgumentList(@TempDir Path serverDir) throws IOException {
+        Files.createFile(serverDir.resolve("Raven.Server.dll"));
+        ServerOptions options = optionsFor(serverDir);
+        options.setDotNetPath("dotnet");
+        options.setServerUrl("http://127.0.0.1:9999");
+        options.setFrameworkVersion("8.0.10"); // an exact version is matched verbatim, without a `dotnet --info` probe
+        options.getCommandLineArgs().add("--Logs.Mode=Information");
+
+        LicensingOptions licensing = options.getLicensing();
+        licensing.setLicensePath("/etc/ravendb/license.json");
+        licensing.setEulaAccepted(true);
+        licensing.setDisableAutoUpdate(true);
+        licensing.setDisableAutoUpdateFromApi(true);
+        licensing.setDisableLicenseSupportCheck(false);
+        licensing.setThrowOnInvalidOrMissingLicense(true);
+
+        List<String> cmd = new ArrayList<>(RavenServerRunner.buildCommandLine(options));
+        normalize(cmd, "--Embedded.ParentProcessId=", "\\d+", "<pid>");
+
+        assertThat(cmd).containsExactly(
+                "dotnet",
+                "--fx-version",
+                "8.0.10",
+                serverDir.resolve("Raven.Server.dll").toString(),
+                "--Logs.Mode=Information", // user arguments stay in front of the library's
+                "--Embedded.ParentProcessId=<pid>",
+                "--License.Path=/etc/ravendb/license.json",
+                "--License.Eula.Accepted=True",
+                "--License.DisableAutoUpdate=True",
+                "--License.DisableAutoUpdateFromApi=True",
+                "--License.DisableLicenseSupportCheck=False",
+                "--License.ThrowOnInvalidOrMissingLicense=True",
+                "--Setup.Mode=None",
+                "--DataDir=" + serverDir.resolve("data"),
+                "--Logs.Path=" + serverDir.resolve("logs"),
+                "--ServerUrl=http://127.0.0.1:9999");
+    }
+
+    @Test
+    public void securedWithCertificatePathProducesTheExactArgumentList(@TempDir Path serverDir) throws Exception {
+        Files.createFile(serverDir.resolve("Raven.Server.dll"));
+        char[] password = "changeit".toCharArray();
+        Path pkcs12 = generateClientCertificate(serverDir, password);
+
+        ServerOptions options = optionsFor(serverDir);
+        options.setDotNetPath("dotnet");
+        options.secured(pkcs12.toString(), password);
+
+        List<String> cmd = new ArrayList<>(RavenServerRunner.buildCommandLine(options));
+        normalize(cmd, "--Embedded.ParentProcessId=", "\\d+", "<pid>");
+        normalize(cmd, "--Security.WellKnownCertificates.Admin=", "[0-9a-fA-F]{40}", "<sha1>");
+
+        assertThat(cmd).containsExactly(
+                "dotnet",
+                serverDir.resolve("Raven.Server.dll").toString(),
+                "--Embedded.ParentProcessId=<pid>",
+                "--License.Eula.Accepted=False",
+                "--License.DisableAutoUpdate=False",
+                "--License.DisableAutoUpdateFromApi=False",
+                "--License.DisableLicenseSupportCheck=True",
+                "--License.ThrowOnInvalidOrMissingLicense=False",
+                "--Setup.Mode=None",
+                "--DataDir=" + serverDir.resolve("data"),
+                "--Logs.Path=" + serverDir.resolve("logs"),
+                "--Security.Certificate.Path=" + pkcs12,
+                "--Security.Certificate.Password=changeit",
+                "--Security.WellKnownCertificates.Admin=<sha1>",
+                "--ServerUrl=https://127.0.0.1:0"); // a secured server defaults to https, not http
+    }
+
+    // As in C#, no password means no --Security.Certificate.Password argument
+    @Test
+    public void securedWithoutAPasswordOmitsThePasswordArgument(@TempDir Path serverDir) throws Exception {
+        Files.createFile(serverDir.resolve("Raven.Server.dll"));
+        Path pkcs12 = generatePasswordlessClientCertificate(serverDir);
+
+        ServerOptions options = optionsFor(serverDir);
+        options.setDotNetPath("dotnet");
+        options.secured(pkcs12.toString());
+
+        assertThat(options.getSecurity().getCertificatePassword())
+                .as("no password means null, not an empty array")
+                .isNull();
+
+        List<String> cmd = new ArrayList<>(RavenServerRunner.buildCommandLine(options));
+        normalize(cmd, "--Embedded.ParentProcessId=", "\\d+", "<pid>");
+        normalize(cmd, "--Security.WellKnownCertificates.Admin=", "[0-9a-fA-F]{40}", "<sha1>");
+
+        assertThat(indexOfArgStartingWith(cmd, "--Security.Certificate.Password")).isEqualTo(-1);
+
+        assertThat(cmd).containsExactly(
+                "dotnet",
+                serverDir.resolve("Raven.Server.dll").toString(),
+                "--Embedded.ParentProcessId=<pid>",
+                "--License.Eula.Accepted=False",
+                "--License.DisableAutoUpdate=False",
+                "--License.DisableAutoUpdateFromApi=False",
+                "--License.DisableLicenseSupportCheck=True",
+                "--License.ThrowOnInvalidOrMissingLicense=False",
+                "--Setup.Mode=None",
+                "--DataDir=" + serverDir.resolve("data"),
+                "--Logs.Path=" + serverDir.resolve("logs"),
+                "--Security.Certificate.Path=" + pkcs12,
+                "--Security.WellKnownCertificates.Admin=<sha1>",
+                "--ServerUrl=https://127.0.0.1:0");
+    }
+
+    @Test
+    public void securedWithCertificateExecProducesTheExactArgumentList(@TempDir Path serverDir) throws Exception {
+        Files.createFile(serverDir.resolve("Raven.Server.dll"));
+        char[] password = "changeit".toCharArray();
+        KeyStore clientCertificate = load(generateClientCertificate(serverDir, password), password);
+
+        ServerOptions options = optionsFor(serverDir);
+        options.setDotNetPath("dotnet");
+        options.secured("/usr/local/bin/get-cert", "--profile production", "ABCD1234", clientCertificate, null);
+
+        List<String> cmd = new ArrayList<>(RavenServerRunner.buildCommandLine(options));
+        normalize(cmd, "--Embedded.ParentProcessId=", "\\d+", "<pid>");
+        normalize(cmd, "--Security.WellKnownCertificates.Admin=", "[0-9a-fA-F]{40}", "<sha1>");
+
+        assertThat(cmd).containsExactly(
+                "dotnet",
+                serverDir.resolve("Raven.Server.dll").toString(),
+                "--Embedded.ParentProcessId=<pid>",
+                "--License.Eula.Accepted=False",
+                "--License.DisableAutoUpdate=False",
+                "--License.DisableAutoUpdateFromApi=False",
+                "--License.DisableLicenseSupportCheck=True",
+                "--License.ThrowOnInvalidOrMissingLicense=False",
+                "--Setup.Mode=None",
+                "--DataDir=" + serverDir.resolve("data"),
+                "--Logs.Path=" + serverDir.resolve("logs"),
+                "--Security.Certificate.Load.Exec=/usr/local/bin/get-cert",
+                "--Security.Certificate.Load.Exec.Arguments=--profile production",
+                "--Security.WellKnownCertificates.Admin=<sha1>",
+                "--ServerUrl=https://127.0.0.1:0");
+    }
+
+    @Test
+    public void frameworkVersionIsIgnoredForASelfContainedExecutable(@TempDir Path serverDir) throws IOException {
+        String exeName = SystemUtils.IS_OS_WINDOWS ? "Raven.Server.exe" : "Raven.Server";
+        Files.createFile(serverDir.resolve(exeName));
+        ServerOptions options = optionsFor(serverDir);
+        options.setFrameworkVersion("8.0.10");
+
+        List<String> cmd = RavenServerRunner.buildCommandLine(options);
+
+        assertThat(cmd).doesNotContain("--fx-version", "8.0.10");
+    }
+
+    // Platform-independent, so it also runs on a Linux-only CI
+    @Test
+    public void preEscapingIsDecidedByQuotesOrATrailingBackslashWithWhitespace() {
+        assertThat(RavenServerRunner.needsPreEscaping("--DataDir=C:\\ravendb\\data")).isFalse();
+        assertThat(RavenServerRunner.needsPreEscaping("--Args=--pfx cert.pfx")).isFalse();
+        assertThat(RavenServerRunner.needsPreEscaping("--DataDir=C:\\ravendb\\")).isFalse(); // no whitespace
+
+        assertThat(RavenServerRunner.needsPreEscaping("--License={\"Id\":\"a1b2\"}")).isTrue();
+        assertThat(RavenServerRunner.needsPreEscaping("--DataDir=C:\\raven data\\")).isTrue();
+    }
+
+    // Platform-independent, so it also runs on a Linux-only CI
+    @Test
+    public void preEscapingRewritesOnlyTheArgumentsThatNeedIt() {
+        List<String> args = new ArrayList<>(Arrays.asList(
+                "--Args=--pfx cert.pfx",           // whitespace alone is left to ProcessBuilder
+                "--DataDir=C:\\ravendb\\",           // trailing backslash without whitespace
+                "--License={\"Id\":\"a1b2\"}",
+                "--DataDir=C:\\raven data\\"));
+
+        RavenServerRunner.preEscapeUnsafeArguments(args);
+
+        assertThat(args).containsExactly(
+                "--Args=--pfx cert.pfx",
+                "--DataDir=C:\\ravendb\\",
+                "--License={\\\"Id\\\":\\\"a1b2\\\"}",
+                "\"--DataDir=C:\\raven data\\\\\"");
+    }
+
+    @Test
+    public void strictQuotingModeIsSelectedOnlyByTheExactValueFalse() {
+        String previousMode = System.getProperty(ALLOW_AMBIGUOUS_COMMANDS);
+        String previousSpec = System.getProperty(SPEC_VERSION);
+        System.setProperty(SPEC_VERSION, "11"); // isolate from the Java 8 rule asserted at the end
+        try {
+            System.setProperty(ALLOW_AMBIGUOUS_COMMANDS, "false");
+            assertThat(RavenServerRunner.processBuilderEscapesArgumentsItself()).isTrue();
+
+            System.setProperty(ALLOW_AMBIGUOUS_COMMANDS, "FALSE");
+            assertThat(RavenServerRunner.processBuilderEscapesArgumentsItself()).isTrue();
+
+            System.setProperty(ALLOW_AMBIGUOUS_COMMANDS, "true");
+            assertThat(RavenServerRunner.processBuilderEscapesArgumentsItself()).isFalse();
+
+            System.setProperty(ALLOW_AMBIGUOUS_COMMANDS, "yes");
+            assertThat(RavenServerRunner.processBuilderEscapesArgumentsItself()).isFalse();
+
+            System.setProperty(SPEC_VERSION, "1.8");
+            System.setProperty(ALLOW_AMBIGUOUS_COMMANDS, "false");
+            assertThat(RavenServerRunner.processBuilderEscapesArgumentsItself())
+                    .as("Java 8 eats embedded quotes in every mode")
+                    .isFalse();
+        } finally {
+            restoreProperty(SPEC_VERSION, previousSpec);
+            restoreProperty(ALLOW_AMBIGUOUS_COMMANDS, previousMode);
+        }
     }
 
     @Test

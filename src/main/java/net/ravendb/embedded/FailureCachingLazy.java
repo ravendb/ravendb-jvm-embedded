@@ -16,7 +16,7 @@ final class FailureCachingLazy<T> {
 
     private volatile boolean evaluated;
     private T value;
-    private RuntimeException failure;
+    private Throwable failure;
 
     FailureCachingLazy(Supplier<T> valueFactory) {
         this.valueFactory = valueFactory;
@@ -44,7 +44,7 @@ final class FailureCachingLazy<T> {
                 if (!evaluated) {
                     try {
                         value = valueFactory.get();
-                    } catch (RuntimeException e) {
+                    } catch (Throwable e) {
                         failure = e;
                     }
                     evaluated = true;
@@ -53,9 +53,19 @@ final class FailureCachingLazy<T> {
         }
 
         if (failure != null) {
-            throw failure;
+            throw rethrow(failure);
         }
 
         return value;
+    }
+
+    private static RuntimeException rethrow(Throwable failure) {
+        if (failure instanceof Error) {
+            throw (Error) failure;
+        }
+        if (failure instanceof RuntimeException) {
+            return (RuntimeException) failure;
+        }
+        return new IllegalStateException(failure);
     }
 }

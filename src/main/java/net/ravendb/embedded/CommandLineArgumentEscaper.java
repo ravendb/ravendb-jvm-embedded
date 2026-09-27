@@ -16,10 +16,6 @@ public class CommandLineArgumentEscaper {
     }
 
     public static String escapeSingleArg(String arg) {
-        if (arg == null) {
-            return null;
-        }
-
         StringBuilder sb = new StringBuilder();
 
         boolean needsQuotes = containsWhitespace(arg);

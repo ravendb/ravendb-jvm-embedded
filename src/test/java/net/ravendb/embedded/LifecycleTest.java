@@ -34,6 +34,11 @@ public class LifecycleTest {
     }
 
     @Test
+    public void processIdForLogDegradesInsteadOfThrowing() {
+        assertThat(EmbeddedServer.processIdForLog(null)).isEqualTo("N/A");
+    }
+
+    @Test
     public void processIdRestartAndExitListener() throws Exception {
         assumeTrue(new File(CopyServerFromNugetProvider.SERVER_FILES).isDirectory(),
                 "RavenDB server payload missing - run `mvn generate-resources`");
@@ -68,6 +73,46 @@ public class LifecycleTest {
 
                 assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
                 assertThat(exited.get()).isTrue();
+            }
+        }
+    }
+
+    // RavenDB_25137.Can_Stop_Server_Gently
+    @Test
+    public void canStopServerGently() throws Exception {
+        assumeTrue(new File(CopyServerFromNugetProvider.SERVER_FILES).isDirectory(),
+                "RavenDB server payload missing - run `mvn generate-resources`");
+
+        Reference<String> tempDir = new Reference<>();
+        try (CleanCloseable context = DirUtils.withTemporaryDir(tempDir)) {
+            try (EmbeddedServer embedded = new EmbeddedServer()) {
+                AtomicBoolean killed = new AtomicBoolean();
+                embedded.forTestingPurposesOnly().onProcessKilled = process -> killed.set(true);
+
+                embedded.startServer(options(tempDir.value));
+                embedded.stopServer();
+
+                assertThat(killed).isFalse();
+            }
+        }
+    }
+
+    // RavenDB_25137.Can_Force_Stop_Server
+    @Test
+    public void canForceStopServer() throws Exception {
+        assumeTrue(new File(CopyServerFromNugetProvider.SERVER_FILES).isDirectory(),
+                "RavenDB server payload missing - run `mvn generate-resources`");
+
+        Reference<String> tempDir = new Reference<>();
+        try (CleanCloseable context = DirUtils.withTemporaryDir(tempDir)) {
+            try (EmbeddedServer embedded = new EmbeddedServer()) {
+                AtomicBoolean killed = new AtomicBoolean();
+                embedded.forTestingPurposesOnly().onProcessKilled = process -> killed.set(true);
+
+                embedded.startServer(options(tempDir.value));
+                embedded.stopServer(true);
+
+                assertThat(killed).isTrue();
             }
         }
     }

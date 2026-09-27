@@ -25,7 +25,7 @@ public class ServerOptions {
     static String DEFAULT_SERVER_LOCATION = Paths.get(BASE_DIRECTORY, "RavenDBServer").toString();
     static String ALT_SERVER_LOCATION = Paths.get(BASE_DIRECTORY, "bin", "RavenDBServer").toString();
 
-    private String frameworkVersion = "10.0.11+";
+    private String frameworkVersion = "10.0.12+";
 
     private String logsPath = Paths.get(BASE_DIRECTORY, "RavenDB", "Logs").toString();
     private String dataDirectory = Paths.get(BASE_DIRECTORY, "RavenDB").toString();
@@ -46,7 +46,7 @@ public class ServerOptions {
     private SecurityOptions security;
 
     public ServerOptions secured(String certificatePath) {
-        return secured(certificatePath, "".toCharArray(), null);
+        return secured(certificatePath, null, null);
     }
 
     public ServerOptions secured(String certificatePath, char[] certPassword) {
@@ -55,7 +55,7 @@ public class ServerOptions {
 
     @SuppressWarnings("UnusedReturnValue")
     public ServerOptions secured(String certificatePath, String caCertificatePath) {
-        return secured(certificatePath, "".toCharArray(), caCertificatePath);
+        return secured(certificatePath, null, caCertificatePath);
     }
 
     public ServerOptions secured(String certificatePath, char[] certPassword, String caCertificatePath) {
@@ -69,7 +69,9 @@ public class ServerOptions {
 
         try {
             KeyStore clientStore = KeyStore.getInstance("PKCS12");
-            clientStore.load(new FileInputStream(certificatePath), certPassword);
+            try (InputStream clientStoreSource = new FileInputStream(certificatePath)) {
+                clientStore.load(clientStoreSource, certPassword != null ? certPassword : new char[0]);
+            }
 
             this.security = new SecurityOptions();
             this.security.setCertificatePath(certificatePath);

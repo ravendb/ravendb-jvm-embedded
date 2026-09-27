@@ -17,6 +17,7 @@ import org.apache.commons.logging.LogFactory;
 
 import java.io.*;
 import java.lang.reflect.Field;
+import java.math.BigDecimal;
 import java.security.KeyStore;
 import java.lang.reflect.Method;
 import java.time.Duration;
@@ -110,12 +111,26 @@ public class EmbeddedServer implements CleanCloseable {
      */
     @SuppressWarnings("unused")
     public void stopServer() {
+        stopServer(false);
+    }
+
+    /**
+     * Stops the server process without disposing the created document stores.
+     *
+     * @param force kill the process instead of waiting for a graceful shutdown
+     */
+    @SuppressWarnings("unused")
+    public void stopServer(boolean force) {
         FailureCachingLazy<Tuple<String, Process>> existing = _serverTask.get();
         if (_serverOptions == null || existing == null || !existing.isEvaluated()) {
             throw new IllegalStateException("Cannot call stopServer() before calling startServer().");
         }
 
         Process process = existing.getValue().second;
+
+        if (force) {
+            killServerProcess(process);
+        }
 
         try {
             shutdownServerProcess(process);
@@ -145,6 +160,15 @@ public class EmbeddedServer implements CleanCloseable {
         }
 
         startServerInternal(_serverOptions);
+    }
+
+    /** {@link #getProcessId} throws on Windows under Java 8; a log line must not replace the failure it reports. */
+    static String processIdForLog(Process process) {
+        try {
+            return String.valueOf(getProcessId(process));
+        } catch (Exception e) {
+            return "N/A";
+        }
     }
 
     private static long getProcessId(Process process) {
@@ -253,7 +277,6 @@ public class EmbeddedServer implements CleanCloseable {
         }
 
         Duration gracefulShutdownTimeout = _serverOptions.getGracefulShutdownTimeout();
-        Duration processKillTimeout = _serverOptions.getProcessKillTimeout();
 
         //noinspection SynchronizationOnLocalVariableOrMethodParameter
         synchronized (process) {
@@ -261,9 +284,11 @@ public class EmbeddedServer implements CleanCloseable {
                 return;
             }
 
+            String pid = processIdForLog(process);
+
             try {
-                if (logger.isInfoEnabled()) {
-                    logger.info("Try shutdown server gracefully.");
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Try shutdown server PID " + pid + " gracefully.");
                 }
 
                 try (OutputStream stream = process.getOutputStream();
@@ -275,23 +300,48 @@ public class EmbeddedServer implements CleanCloseable {
                     return;
                 }
             } catch (Exception e) {
-                if (logger.isInfoEnabled()) {
-                    logger.info("Failed to gracefully shutdown server in " + gracefulShutdownTimeout.toString(), e);
+                if (logger.isWarnEnabled()) {
+                    logger.warn("Failed to shutdown server PID " + pid + " gracefully in "
+                            + gracefulShutdownTimeout.toString(), e);
                 }
             }
 
+            killServerProcess(process);
+        }
+    }
+
+    private void killServerProcess(Process process) {
+        if (process == null || !process.isAlive()) {
+            return;
+        }
+
+        Duration processKillTimeout = _serverOptions.getProcessKillTimeout();
+
+        synchronized (process) {
+            if (!process.isAlive()) {
+                return;
+            }
+
+            String pid = processIdForLog(process);
+
             try {
-                if (logger.isInfoEnabled()) {
-                    logger.info("Killing global server");
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Killing global server PID " + pid + ".");
                 }
 
                 Process killed = process.destroyForcibly();
                 if (!killed.waitFor(processKillTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                    logger.warn("Server process did not terminate within " + processKillTimeout + " after a forced kill.");
+                    if (logger.isInfoEnabled()) {
+                        logger.info("Process " + pid + " did not exit after a forced kill within " + processKillTimeout + ".");
+                    }
+                }
+
+                if (_forTestingPurposes != null && _forTestingPurposes.onProcessKilled != null) {
+                    _forTestingPurposes.onProcessKilled.accept(process);
                 }
             } catch (Exception e) {
-                if (logger.isInfoEnabled()) {
-                    logger.info("Failed to kill server process.");
+                if (logger.isWarnEnabled()) {
+                    logger.warn("Failed to kill process " + pid, e);
                 }
             }
         }
@@ -421,8 +471,9 @@ public class EmbeddedServer implements CleanCloseable {
         stdoutReader.start();
         stderrReader.start();
 
+        Object firstCompleted;
         try {
-            CompletableFuture.anyOf(urlFuture, stderrEndFuture).get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            firstCompleted = CompletableFuture.anyOf(urlFuture, stderrEndFuture).get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             String stdout = snapshot(stdoutBuilder, stdoutLock);
             String stderr = snapshot(stderrBuilder, stderrLock);
@@ -435,20 +486,21 @@ public class EmbeddedServer implements CleanCloseable {
                     snapshot(stdoutBuilder, stdoutLock), snapshot(stderrBuilder, stderrLock), false, timeout), e);
         }
 
-        if (urlFuture.isDone()) {
-            return urlFuture.getNow(null);
-        }
-
-        try {
-            return urlFuture.get(5, TimeUnit.SECONDS);
-        } catch (TimeoutException | ExecutionException e) {
-            // still no URL - fall through to failure
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        if (firstCompleted != null) {
+            return (String) firstCompleted;
         }
 
         String stdout = snapshot(stdoutBuilder, stdoutLock);
         String stderr = snapshot(stderrBuilder, stderrLock);
+
+        try {
+            urlFuture.get(5, TimeUnit.SECONDS);
+        } catch (TimeoutException | ExecutionException e) {
+            // no URL either
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
         throw new IllegalStateException(buildStartupExceptionMessage(stdout, stderr, false, timeout));
     }
 
@@ -458,10 +510,15 @@ public class EmbeddedServer implements CleanCloseable {
         }
     }
 
+    /** As C# prints {@code TimeSpan.TotalSeconds}: "0.7", "60". */
+    private static String formatSeconds(Duration timeout) {
+        return BigDecimal.valueOf(timeout.toMillis(), 3).stripTrailingZeros().toPlainString();
+    }
+
     private static String buildStartupExceptionMessage(String outputString, String errorString, boolean isTimeout, Duration timeout) {
         StringBuilder sb = new StringBuilder();
         if (isTimeout) {
-            sb.append("Server failed to start in ").append(timeout.getSeconds()).append(" s.");
+            sb.append("Server failed to start in ").append(formatSeconds(timeout)).append(" s.");
         } else {
             sb.append("Unable to start the RavenDB Server");
         }
@@ -523,5 +580,19 @@ public class EmbeddedServer implements CleanCloseable {
         }
 
         _documentStores.clear();
+    }
+
+    private TestingStuff _forTestingPurposes;
+
+    TestingStuff forTestingPurposesOnly() {
+        if (_forTestingPurposes != null) {
+            return _forTestingPurposes;
+        }
+
+        return _forTestingPurposes = new TestingStuff();
+    }
+
+    static class TestingStuff {
+        Consumer<Process> onProcessKilled;
     }
 }

@@ -131,6 +131,10 @@ class RavenServerRunner {
             return;
         }
 
+        preEscapeUnsafeArguments(args);
+    }
+
+    static void preEscapeUnsafeArguments(List<String> args) {
         for (int i = 0; i < args.size(); i++) {
             String arg = args.get(i);
             if (arg != null && needsPreEscaping(arg)) {
@@ -139,7 +143,7 @@ class RavenServerRunner {
         }
     }
 
-    private static boolean needsPreEscaping(String arg) {
+    static boolean needsPreEscaping(String arg) {
         if (arg.indexOf('"') >= 0) {
             return true;
         }
@@ -147,7 +151,7 @@ class RavenServerRunner {
         return arg.endsWith("\\") && CommandLineArgumentEscaper.containsWhitespace(arg);
     }
 
-    private static boolean processBuilderEscapesArgumentsItself() {
+    static boolean processBuilderEscapesArgumentsItself() {
         // Java 8 eats embedded quotes in every mode, and doubles at most one trailing backslash
         if ("1.8".equals(System.getProperty("java.specification.version"))) {
             return false;

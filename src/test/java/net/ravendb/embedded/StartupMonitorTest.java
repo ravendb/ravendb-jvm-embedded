@@ -16,15 +16,61 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class StartupMonitorTest {
 
     @Test
-    public void returnsUrlWhenServerAnnouncesIt() {
+    public void returnsUrlWhenServerAnnouncesIt() throws IOException {
         InputStream stdout = new ByteArrayInputStream(
                 ("Booting up...\r\n" +
                  "Server available on: http://127.0.0.1:8080\r\n").getBytes(StandardCharsets.UTF_8));
-        InputStream stderr = new ByteArrayInputStream(new byte[0]);
 
-        String url = EmbeddedServer.awaitServerUrl(stdout, stderr, Duration.ofSeconds(5));
+        // stderr stays open, as a live server's does
+        PipedOutputStream stderrOut = new PipedOutputStream();
+        PipedInputStream stderr = new PipedInputStream(stderrOut);
 
-        assertThat(url).isEqualTo("http://127.0.0.1:8080");
+        try {
+            String url = EmbeddedServer.awaitServerUrl(stdout, stderr, Duration.ofSeconds(5));
+
+            assertThat(url).isEqualTo("http://127.0.0.1:8080");
+        } finally {
+            stderrOut.close();
+        }
+    }
+
+    // As in C#, once stderr wins the race the start has failed - a URL during the grace period does not rescue it
+    @Test
+    public void urlArrivingAfterStderrEndedIsStillAFailure() throws IOException {
+        PipedOutputStream stdoutOut = new PipedOutputStream();
+        PipedInputStream stdout = new PipedInputStream(stdoutOut);
+        stdoutOut.write("Booting up...\r\n".getBytes(StandardCharsets.UTF_8));
+        stdoutOut.flush();
+
+        // stderr has its say and ends immediately - the process is on its way down
+        InputStream stderr = new ByteArrayInputStream(
+                "Unhandled exception: boom\r\n".getBytes(StandardCharsets.UTF_8));
+
+        Thread lateAnnouncement = new Thread(() -> {
+            try {
+                Thread.sleep(300);
+                stdoutOut.write("Server available on: http://127.0.0.1:8080\r\n".getBytes(StandardCharsets.UTF_8));
+                stdoutOut.flush();
+            } catch (IOException e) {
+                // the reader is gone - nothing to announce to
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, "late URL announcement");
+        lateAnnouncement.setDaemon(true);
+        lateAnnouncement.start();
+
+        try {
+            assertThatThrownBy(() -> EmbeddedServer.awaitServerUrl(stdout, stderr, Duration.ofSeconds(30)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Unable to start the RavenDB Server")
+                    .hasMessageContaining("Unhandled exception: boom")
+                    .hasMessageContaining("Booting up...")
+                    // stdout is captured before the grace period, as in C#
+                    .hasMessageNotContaining("Server available on:");
+        } finally {
+            stdoutOut.close();
+        }
     }
 
     @Test
@@ -42,9 +88,26 @@ public class StartupMonitorTest {
         try {
             assertThatThrownBy(() -> EmbeddedServer.awaitServerUrl(stdout, stderr, Duration.ofMillis(700)))
                     .isInstanceOf(ServerStartupTimeoutException.class)
-                    .hasMessageContaining("Server failed to start in")
+                    .hasMessageContaining("Server failed to start in 0.7 s.")
                     // The pre-fix code lost stderr on timeout; assert it is now included.
                     .hasMessageContaining("Fatal boot error: port already in use");
+        } finally {
+            stdoutOut.close();
+            stderrOut.close();
+        }
+    }
+
+    @Test
+    public void wholeSecondTimeoutHasNoTrailingDecimal() throws IOException {
+        PipedOutputStream stdoutOut = new PipedOutputStream();
+        PipedInputStream stdout = new PipedInputStream(stdoutOut);
+        PipedOutputStream stderrOut = new PipedOutputStream();
+        PipedInputStream stderr = new PipedInputStream(stderrOut);
+
+        try {
+            assertThatThrownBy(() -> EmbeddedServer.awaitServerUrl(stdout, stderr, Duration.ofSeconds(1)))
+                    .isInstanceOf(ServerStartupTimeoutException.class)
+                    .hasMessageContaining("Server failed to start in 1 s.");
         } finally {
             stdoutOut.close();
             stderrOut.close();

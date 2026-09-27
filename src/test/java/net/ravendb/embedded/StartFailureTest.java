@@ -9,6 +9,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
@@ -58,5 +59,18 @@ public class StartFailureTest {
         // and a closed instance can be started again
         assertThat(catchThrowable(() -> embedded.startServer(options))).isInstanceOf(RavenException.class);
         assertThat(provideCount).hasValue(3);
+    }
+
+    @Test
+    public void bothStopServerOverloadsRequireAStartedServer() {
+        EmbeddedServer embedded = new EmbeddedServer();
+
+        assertThatThrownBy(embedded::stopServer)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Cannot call stopServer() before calling startServer()");
+
+        assertThatThrownBy(() -> embedded.stopServer(true))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Cannot call stopServer() before calling startServer()");
     }
 }
