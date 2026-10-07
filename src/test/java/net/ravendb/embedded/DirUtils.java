@@ -22,4 +22,32 @@ public class DirUtils {
             }
         };
     }
+
+    /**
+     * Deletes whatever a run left at {@link ServerOptions}' default locations, which are all relative
+     * to the working directory - the maven module, i.e. the repository - rather than to a temp dir:
+     * {@code RavenDB} (data, with {@code RavenDB/Logs} inside it) and {@code RavenDBServer} (the
+     * extracted server). Read from a default-constructed {@code ServerOptions} so this keeps matching
+     * the library instead of hardcoding the names.
+     */
+    public static void deleteDefaultServerArtifacts() {
+        ServerOptions defaults = new ServerOptions();
+
+        deleteDirectory(defaults.getLogsPath());
+        deleteDirectory(defaults.getDataDirectory());
+        deleteDirectory(ServerOptions.DEFAULT_SERVER_LOCATION);
+    }
+
+    private static void deleteDirectory(String path) {
+        File directory = new File(path);
+        if (!directory.isDirectory()) {
+            return;
+        }
+
+        try {
+            FileUtils.deleteDirectory(directory);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
 }

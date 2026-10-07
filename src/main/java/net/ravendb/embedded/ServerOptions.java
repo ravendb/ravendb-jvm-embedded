@@ -23,8 +23,9 @@ public class ServerOptions {
 
     private static final String BASE_DIRECTORY = Paths.get("").toAbsolutePath().toString();
     static String DEFAULT_SERVER_LOCATION = Paths.get(BASE_DIRECTORY, "RavenDBServer").toString();
+    static String ALT_SERVER_LOCATION = Paths.get(BASE_DIRECTORY, "bin", "RavenDBServer").toString();
 
-    private String frameworkVersion = "10.0.9+";
+    private String frameworkVersion = "10.0.12+";
 
     private String logsPath = Paths.get(BASE_DIRECTORY, "RavenDB", "Logs").toString();
     private String dataDirectory = Paths.get(BASE_DIRECTORY, "RavenDB").toString();
@@ -33,9 +34,10 @@ public class ServerOptions {
     private String targetServerLocation = DEFAULT_SERVER_LOCATION;
     private String dotNetPath = "dotnet";
     private boolean clearTargetServerLocation = false;
-    private boolean acceptEula = true;
+    private LicensingOptions licensing = new LicensingOptions();
     private String serverUrl;
     private Duration gracefulShutdownTimeout = Duration.ofSeconds(30);
+    private Duration processKillTimeout = Duration.ofSeconds(5);
     private Duration maxServerStartupTimeDuration = Duration.ofMinutes(1);
     private List<String> commandLineArgs = new ArrayList<>();
 
@@ -44,7 +46,7 @@ public class ServerOptions {
     private SecurityOptions security;
 
     public ServerOptions secured(String certificatePath) {
-        return secured(certificatePath, "".toCharArray(), null);
+        return secured(certificatePath, null, null);
     }
 
     public ServerOptions secured(String certificatePath, char[] certPassword) {
@@ -53,7 +55,7 @@ public class ServerOptions {
 
     @SuppressWarnings("UnusedReturnValue")
     public ServerOptions secured(String certificatePath, String caCertificatePath) {
-        return secured(certificatePath, "".toCharArray(), caCertificatePath);
+        return secured(certificatePath, null, caCertificatePath);
     }
 
     public ServerOptions secured(String certificatePath, char[] certPassword, String caCertificatePath) {
@@ -67,7 +69,9 @@ public class ServerOptions {
 
         try {
             KeyStore clientStore = KeyStore.getInstance("PKCS12");
-            clientStore.load(new FileInputStream(certificatePath), certPassword);
+            try (InputStream clientStoreSource = new FileInputStream(certificatePath)) {
+                clientStore.load(clientStoreSource, certPassword != null ? certPassword : new char[0]);
+            }
 
             this.security = new SecurityOptions();
             this.security.setCertificatePath(certificatePath);
@@ -171,12 +175,31 @@ public class ServerOptions {
         this.dotNetPath = dotNetPath;
     }
 
-    public boolean isAcceptEula() {
-        return acceptEula;
+    public LicensingOptions getLicensing() {
+        return licensing;
     }
 
+    public void setLicensing(LicensingOptions licensing) {
+        this.licensing = licensing;
+    }
+
+    /**
+     * @deprecated use {@link #getLicensing()}.{@link LicensingOptions#isEulaAccepted() isEulaAccepted()} instead.
+     */
+    @Deprecated
+    public boolean isAcceptEula() {
+        return licensing != null && licensing.isEulaAccepted();
+    }
+
+    /**
+     * @deprecated use {@link #getLicensing()}.{@link LicensingOptions#setEulaAccepted(boolean) setEulaAccepted(boolean)} instead.
+     */
+    @Deprecated
     public void setAcceptEula(boolean acceptEula) {
-        this.acceptEula = acceptEula;
+        if (licensing == null) {
+            licensing = new LicensingOptions();
+        }
+        licensing.setEulaAccepted(acceptEula);
     }
 
     public String getServerUrl() {
@@ -193,6 +216,14 @@ public class ServerOptions {
 
     public void setGracefulShutdownTimeout(Duration gracefulShutdownTimeout) {
         this.gracefulShutdownTimeout = gracefulShutdownTimeout;
+    }
+
+    public Duration getProcessKillTimeout() {
+        return processKillTimeout;
+    }
+
+    public void setProcessKillTimeout(Duration processKillTimeout) {
+        this.processKillTimeout = processKillTimeout;
     }
 
     public Duration getMaxServerStartupTimeDuration() {

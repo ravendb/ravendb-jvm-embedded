@@ -5,6 +5,7 @@ import net.ravendb.client.documents.conventions.DocumentConventions;
 import net.ravendb.client.documents.session.IDocumentSession;
 import net.ravendb.client.primitives.CleanCloseable;
 import net.ravendb.client.primitives.Reference;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Paths;
@@ -20,10 +21,7 @@ public class BasicTest {
         try (CleanCloseable context = DirUtils.withTemporaryDir(tempDir)) {
             try (EmbeddedServer embedded = new EmbeddedServer()) {
                 ServerOptions serverOptions = new ServerOptions();
-                serverOptions.setTargetServerLocation(Paths.get(tempDir.value, "RavenDBServer").toString());
-                serverOptions.setDataDirectory(Paths.get(tempDir.value, "RavenDB").toString());
-                serverOptions.setLogsPath(Paths.get(tempDir.value, "Logs").toString());
-                serverOptions.provider = new CopyServerFromNugetProvider();
+                configureServerOptions(tempDir, serverOptions);
                 serverOptions.setCommandLineArgs(Collections.singletonList("--Features.Availability=Experimental"));
                 embedded.startServer(serverOptions);
 
@@ -50,9 +48,7 @@ public class BasicTest {
 
             try (EmbeddedServer embedded = new EmbeddedServer()) {
                 ServerOptions serverOptions = new ServerOptions();
-                serverOptions.setTargetServerLocation(Paths.get(tempDir.value, "RavenDBServer").toString());
-                serverOptions.setDataDirectory(Paths.get(tempDir.value, "RavenDB").toString());
-                serverOptions.provider = new CopyServerFromNugetProvider();
+                configureServerOptions(tempDir, serverOptions);
                 embedded.startServer(serverOptions);
 
                 try (IDocumentStore store = embedded.getDocumentStore("Test")) {
@@ -73,5 +69,19 @@ public class BasicTest {
                 }
             }
         }
+    }
+
+
+    private static void configureServerOptions(Reference<String> tempDir, ServerOptions serverOptions) {
+        serverOptions.setTargetServerLocation(Paths.get(tempDir.value, "RavenDBServer").toString());
+        serverOptions.setDataDirectory(Paths.get(tempDir.value, "RavenDB").toString());
+        serverOptions.setLogsPath(Paths.get(tempDir.value, "Logs").toString());
+
+        serverOptions.provider = new CopyServerFromNugetProvider();
+    }
+
+    @AfterAll
+    public static void deleteDefaultLocationArtifacts() {
+        DirUtils.deleteDefaultServerArtifacts();
     }
 }
